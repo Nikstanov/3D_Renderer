@@ -6,6 +6,7 @@
 #include "Lab1.h"
 #include "geometry.h"
 #include "engine.h"
+#include "camera.h"
 #include <vector>
 #include <string>
 #include <fstream>
@@ -20,7 +21,7 @@ HINSTANCE hInst;                                // current instance
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 HWND win;
-std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\teapot.obj";
+std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\cube.obj";
 
 struct Point {
     Vec4f* vertex = 0;
@@ -49,20 +50,9 @@ float znear = 0.1f;
 float lastX = 400, lastY = 300;
 float constLight = .2f;
 
-Vec3f eye{ 0.0f, 2.f, 2.0f };
-Vec3f up{ 0.0f , 1.0f , 0.0f };
-Vec3f target{ 0.0f , 1.0f , 0.0f };
-Vec3f front;
-//Vec3f front{ 0.0f , 0.0f , -1.0f };
-
-float cameraR = 5.0f;
-float cameraZeta = 3.141557f/2;
-float cameraPhi = 3.141557f / 2;
-float minScaleSize = 0.0001f;
-float maxScaleSize = cameraR * 3.0f;
+Camera camera{5.0f,  3.141557f / 2 ,  3.141557f / 2 , Vec3f(0.0f , 1.0f , 0.0f)};
 
 Vec3f light{ 1.0f, 0.0f, 1.0f};
-Vec3f lightView;
 
 template <class T> void SafeRelease(T** ppT)
 {
@@ -81,8 +71,8 @@ class MainWindow : public BaseWindow<MainWindow>
     IDWriteFactory* pDWriteFactory_;
     IDWriteTextFormat* pTextFormat_;
     ID2D1Bitmap* bitmap;
-    DWORD* buffer;
-    int* zbuffer;
+    DWORD*  buffer;
+    int*    zbuffer;
     int maxInd;
     D2D1_RECT_U winSize;
     D2D1_RECT_F winSizeF;
@@ -94,7 +84,6 @@ class MainWindow : public BaseWindow<MainWindow>
     void                OnPaint();
     void                rasterize(Vec3i t0, Vec3i t1, Vec3i t2, Vec3f vn0, Vec3f vn1, Vec3f vn2, COLORREF color);
     void                rasterize(Vec3i t0, Vec3i t1, Vec3i t2, COLORREF color);
-    //Vec2f*              rasterization(Vec4f* verts, COLORREF color);
     inline void         setPixel(int x, int y, COLORREF color);
     void                drawLine(int x1, int y1, int x2, int y2, COLORREF color);
 
@@ -279,7 +268,7 @@ HRESULT MainWindow::CreateGraphicsResources()
         }
         viewport(width, height);
         projection(aspect, FOV, zfar, znear);
-        view(eye, target, up);
+        camera.updateViewMatrix();
     }
 
     return hr;
@@ -397,7 +386,7 @@ void MainWindow::rasterize(Vec3i t0, Vec3i t1, Vec3i t2, Vec3f vn0, Vec3f vn1, V
             float Id = 0.5f * (Norm * light);
 
             Vec3f R = (Norm * (Norm * light * 2.f) - light).normalize();
-            float Is = (R * front);
+            float Is = (R * camera.getFront());
 
             int idx = P.x + P.y * width;
             if (zbuffer[idx] < P.z) {
@@ -458,6 +447,9 @@ bool rerender = true;
 const COLORREF rgbWhite = 0x00FFFFFF;
 const COLORREF rgbBlack = 0x00000000;
 
+bool chained = true;
+int lightMode = 0;
+
 void MainWindow::OnPaint()
 {
     HRESULT hr = CreateGraphicsResources();
@@ -479,22 +471,95 @@ void MainWindow::OnPaint()
                     zbuffer[ind] = -100000;
                 }
             }
-            
-            eye.x = cameraR * cos(cameraPhi) * sin(cameraZeta);
-            eye.z = cameraR * sin(cameraPhi) * sin(cameraZeta);
-            eye.y = cameraR * cos(cameraZeta);
-            view(eye, target, up);
-            front = target - eye;
 
+            camera.updateViewMatrix();
             Matrix finalMatrix = Viewport * Projection * ModelView;
             Vec4f drawFace[3];
             Vec3f normals[3];
             Face face;
             size_t size = faces.size();
+            if (chained) {
+                for (size_t i = 0; i < size; i++) {
+                    face = faces[i];
+
+                    /*
+                    if ((face.normal * camera.getFront()) + 1.0f < 0) {
+                        continue;
+                    }
+                    */
+
+                    for (size_t j = 0; j < 3; j++) {
+                        drawFace[j] = finalMatrix * *face.points[j].vertex;
+                        drawFace[j] = drawFace[j] / drawFace[j].w;
+                    }
+
+                    for (int j = 0; j < 3; j++) {
+                        Vec3i a1 = drawFace[j];
+                        Vec3i a2 = drawFace[(j + 1) % 3];
+                        drawLine(a1[0], a1[1], a2[0], a2[1], rgbBlack);
+                    }
+                }
+            }
+            if (lightMode == 1) {
+                for (size_t i = 0; i < size; i++) {
+                    face = faces[i];
+
+                    if ((face.normal * camera.getFront()) + 1.0f < 0) {
+                        continue;
+                    }
+
+                    for (size_t j = 0; j < 3; j++) {
+                        drawFace[j] = finalMatrix * *face.points[j].vertex;
+                        drawFace[j] = drawFace[j] / drawFace[j].w;
+                        drawFace[j][2] = (1.0f - drawFace[j][2]) * 10000.f;
+                    }
+
+                    rasterize(drawFace[0], drawFace[1], drawFace[2], rgbWhite);
+                }
+            }
+            if (lightMode == 2) {
+                for (size_t i = 0; i < size; i++) {
+                    face = faces[i];
+
+                    if ((face.normal * camera.getFront()) + 1.0f < 0) {
+                        continue;
+                    }
+
+                    for (size_t j = 0; j < 3; j++) {
+                        drawFace[j] = finalMatrix * *face.points[j].vertex;
+                        drawFace[j] = drawFace[j] / drawFace[j].w;
+                        drawFace[j][2] = (1.0f - drawFace[j][2]) * 10000.f;
+                    }
+
+                    float colorMultiplier = (face.normal * light) + constLight;
+                    if (colorMultiplier > 1.0f) colorMultiplier = 1.0f;
+                    COLORREF color = RGB(GetRValue(rgbWhite) * colorMultiplier, GetGValue(rgbWhite) * colorMultiplier, GetBValue(rgbWhite) * colorMultiplier);
+                    rasterize(drawFace[0], drawFace[1], drawFace[2], color);
+                }
+            }
+            if (lightMode == 3) {
+                for (size_t i = 0; i < size; i++) {
+                    face = faces[i];
+
+                    if ((face.normal * camera.getFront()) + 1.0f < 0) {
+                        continue;
+                    }
+
+                    for (size_t j = 0; j < 3; j++) {
+                        drawFace[j] = finalMatrix * *face.points[j].vertex;
+                        drawFace[j] = drawFace[j] / drawFace[j].w;
+                        drawFace[j][2] = (1.0f - drawFace[j][2]) * 10000.f;
+                        normals[j] = face.points[j].normal;
+                    }
+
+                    rasterize(drawFace[0], drawFace[1], drawFace[2], normals[0], normals[1], normals[2], rgbWhite);
+                }
+            }
+            /*
             for (size_t i = 0; i < size; i++) {
                 face = faces[i];
     
-                if ((face.normal * front) + 1.0f < 0) {
+                if ((face.normal * camera.getFront()) + 1.0f < 0) {
                     continue;
                 }
                 
@@ -503,29 +568,25 @@ void MainWindow::OnPaint()
                     drawFace[j] = drawFace[j] / drawFace[j].w;
                     drawFace[j][2] = (1.0f - drawFace[j][2]) * 10000.f;
                     normals[j] = face.points[j].normal;
-                    //normals[j] = ModelView * embed<4>(*face.points[j].normal);
                 }
                 
+                // 3 lab
                 //rasterize(drawFace[0], drawFace[1], drawFace[2], normals[0], normals[1], normals[2], rgbWhite);
                 
                 // 2 lab
-                
                 float colorMultiplier = (face.normal * light) + constLight;
                 if (colorMultiplier > 1.0f) colorMultiplier = 1.0f;
                 COLORREF color = RGB(GetRValue(rgbWhite) * colorMultiplier, GetGValue(rgbWhite) * colorMultiplier, GetBValue(rgbWhite) * colorMultiplier);
-                rasterize(drawFace[0], drawFace[1], drawFace[2], rgbWhite);
-                
-                
+                rasterize(drawFace[0], drawFace[1], drawFace[2], color);
+
                 // 1 lab
-                /*
                 for (int j = 0; j < 3; j++) {
                     Vec3i a1 = drawFace[j];
                     Vec3i a2 = drawFace[(j + 1) % 3];
                     drawLine(a1[0], a1[1], a2[0], a2[1], rgbBlack);
                 }
-                */
-                
             }
+            */
             hr = bitmap->CopyFromMemory(&winSize, buffer, width * 4);
             rerender = false;
         }
@@ -565,11 +626,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_MOUSEWHEEL:
     {
         short zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
-        float newCameraR = cameraR + zDelta / 2400.0f;
-        if (newCameraR > minScaleSize && newCameraR < maxScaleSize) {
-            cameraR = newCameraR;
-            rerender = true;
-        }
+        if (camera.updateRadius(zDelta / 2400.0f)) rerender = true;
         break;
     }
     case WM_LBUTTONDOWN:
@@ -598,8 +655,8 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
             xoffset *= sensitivity;
             yoffset *= sensitivity;
 
-            cameraPhi = cameraPhi + xoffset;
-            cameraZeta = cameraZeta + yoffset;
+            camera.cameraPhi += xoffset;
+            camera.cameraZeta += yoffset;
 
             rerender = true;
         }
@@ -607,33 +664,40 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
     }
     case WM_KEYDOWN:
     {
+        if (wParam == '1') {
+            chained = !chained;
+        }
+        if (wParam == '2') {
+            lightMode = (lightMode + 1) % 4;
+        }
         
         float cameraSpeed = 0.05f;
+        float offsetX = 0, offsetY = 0, offsetZ = 0;
         if (wParam == VK_LEFT) {
-            target.x = target.x - cameraSpeed;
+            offsetX -= cameraSpeed;
         }
         if (wParam == VK_RIGHT) {
-            target.x = target.x + cameraSpeed;
+            offsetX += cameraSpeed;
         }
         if (wParam == VK_UP) {
-            target.y = target.y + cameraSpeed;
+            offsetY += cameraSpeed;
         }
         if (wParam == VK_DOWN) {
-            target.y = target.y - cameraSpeed;
+            offsetY -= cameraSpeed;
         }
         if (wParam == 'A') {
-            target.x = target.x - cameraSpeed;
+            offsetX -= cameraSpeed;
         }
         if (wParam == 'D') {
-            target.x = target.x + cameraSpeed;
+            offsetX += cameraSpeed;
         }
         if (wParam == 'W') {
-            target.y = target.y + cameraSpeed;
+            offsetY += cameraSpeed;
         }
         if (wParam == 'S') {
-            target.y = target.y - cameraSpeed;
+            offsetY -= cameraSpeed;
         }
-        
+        camera.updateTarget(offsetX, offsetY, offsetZ);
         if (wParam == VK_ESCAPE) {
             DestroyWindow(m_hwnd);
         }

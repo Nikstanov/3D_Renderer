@@ -11,8 +11,6 @@ void viewport(int width, int height)
     Viewport[1][1] = -height / 2.0f;
     Viewport[0][3] = width / 2.0f;
     Viewport[1][3] = height / 2.0f;
-    //Viewport[2][2] = 2000 / 2.0f;
-    //Viewport[2][3] = 2000 / 2.0f;
 }
 
 void projection(float aspect, float FOV, float zfar, float znear)
