@@ -5,6 +5,8 @@
 #include <cassert>
 #include <iostream>
 
+#include <Eigen/Dense>
+
 template<size_t DimCols, size_t DimRows, typename T> class mat;
 
 template <size_t DIM, typename T> struct vec {
@@ -233,4 +235,5 @@ typedef vec<3, float> Vec3f;
 typedef vec<3, int>   Vec3i;
 typedef vec<4, float> Vec4f;
 typedef mat<4, 4, float> Matrix;
+
 #endif //__GEOMETRY_H__
