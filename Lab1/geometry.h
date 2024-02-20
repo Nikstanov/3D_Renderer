@@ -5,8 +5,6 @@
 #include <cassert>
 #include <iostream>
 
-#include <Eigen/Dense>
-
 template<size_t DimCols, size_t DimRows, typename T> class mat;
 
 template <size_t DIM, typename T> struct vec {
@@ -50,6 +48,7 @@ template <typename T> struct vec<3, T> {
 template <typename T> struct vec<4, T> {
     vec() : x(T()), y(T()), z(T()), w(T()) {}
     vec(T X, T Y, T Z, T W) : x(X), y(Y), z(Z), w(W) {}
+    vec(vec<3,T> v) : x(v[0]), y(v[1]), z(v[2]), w(1.0f) {}
     T& operator[](const size_t i) { return i <= 0 ? x : (1 == i ? y : (2 == i ? z : w)); }
     const T& operator[](const size_t i) const { return i <= 0 ? x : (1 == i ? y : (2 == i ? z : w)); }
     float norm() { return std::sqrt(x * x + y * y + z * z); }

@@ -27,6 +27,7 @@ HWND win;
 std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\car.obj";
 
 BS::thread_pool pool(12);
+
 struct Point {
     int vertexInd = 0;
     int textureInd = -1;
@@ -52,10 +53,11 @@ float FOV = 90.0f;
 float zfar = 100.0f;
 float znear = 0.1f;
 float lastX = 400, lastY = 300;
-float constLight = .2f;
+float constLight = .1f;
 
-Camera camera{5,  3.141557f / 2 ,  3.141557f / 2 , Vec3f(0.0f , 1.0f , 0.0f)};
+Camera camera{5,  3.141557f / 2 ,  3.141557f / 2 , Vec4f(0.0f , 0.0f , 0.0f, 1)};
 Vec3f light{ 1.0f, 1.0f, 1.0f};
+Vec3f lightPos{ 0.0f, 3.0f, 0.f };
 
 DWORD* buffer;
 int* zbuffer;
@@ -323,8 +325,6 @@ void drawLine(int x0, int y0, int x1, int y1, COLORREF color) {
     }
 }
 
-
-
 COLORREF getNewColor(COLORREF color, float koef) {
     if (koef > 1.f) koef = 1.0f;
     if (koef < 0) koef = 0.0f;
@@ -355,17 +355,23 @@ Vec3f barycentric(Vec2f A, Vec2f B, Vec2f C, Vec2f P) {
         s[i][2] = A[i] - P[i];
     }
     Vec3f u = cross(s[0], s[1]);
-    if (std::abs(u[2]) > 1e-2) // dont forget that u[2] is integer. If it is zero then triangle ABC is degenerate
+    if (std::abs(u[2]) > 1e-2) 
         return Vec3f(1.f - (u.x + u.y) / u.z, u.y / u.z, u.x / u.z);
-    return Vec3f(-1, 1, 1); // in this case generate negative coordinates, it will be thrown away by the rasterizator
+    return Vec3f(-1, 1, 1);
 }
 
-void rasterize(mat<4,3,float> &clipc, mat<3,3,float> vn, mat<4,3,float> global, COLORREF color) {
-    mat<3, 4, float> pts = (Viewport * clipc).transpose(); // transposed to ease access to each of the points
+
+COLORREF blue = 0x000000FF;
+const COLORREF rgbWhite = 0x00FFFFFF;
+const COLORREF rgbBlack = 0x00000000;
+const COLORREF back = 0x000000FF;
+
+void rasterize(mat<4,3,float> &clipc, mat<3,3,float> vn, mat<4,3,float> global, COLORREF colorDiff, COLORREF color) {
+    mat<3, 4, float> pts = (Viewport * clipc).transpose();
     mat<3, 2, float> pts2;
     for (int i = 0; i < 3; i++) pts2[i] = proj<2>(pts[i] / pts[i][3]);
 
-    
+    //int ind0 = 0, ind1 = 1, ind2 = 2;
     Vec2i t0 = pts2[0], t1 = pts2[1], t2 = pts2[2];
     if (t0.y == t1.y && t0.y == t2.y) return;
     if (t0.y > t1.y) { std::swap(t0, t1); }
@@ -399,19 +405,28 @@ void rasterize(mat<4,3,float> &clipc, mat<3,3,float> vn, mat<4,3,float> global, 
             float frag_depth = 1.0f - clipc[2] * bc_clip;
 
             Vec3f Norm{ vn[0] * bc_clip, vn[1] * bc_clip , vn[2] * bc_clip };
+            Norm = Norm.normalize();
             Vec3f globalCoords{ global[0] * bc_clip, global[1] * bc_clip , global[2] * bc_clip };
 
-            //Vec3f negLight = (light - globalCoords);
-            Vec3f negLight = light;
+            //Vec3f negLight = light;
+            Vec3f negLight = (lightPos - globalCoords).normalize();
             float Id = (Norm * negLight);
-            Vec3f R = (Norm * (Norm * negLight * 2.f) - negLight).normalize();
-            float Is = 0.5f * (R * (camera.getEye() - globalCoords).normalize());
+            
+            //float Is = pow((R * ((Vec3f)camera.getEye() - globalCoords).normalize()), 128.0f);
+
+            Vec3f viewDir = ((Vec3f)camera.getEye() - globalCoords).normalize();
+            Vec3f R = (Norm * (Norm * negLight) - negLight).normalize();
+            float specularStrength = 5.0f;
+            float spec = specularStrength * pow(max((viewDir * R), 0.0f), 32.0f);
 
             int ind = P.x + P.y * width;
+            DWORD newColor = addColors(addColors(getNewColor(color, spec), getNewColor(colorDiff, Id)), getNewColor(rgbWhite, constLight));
+
+            //newColor = RGB(Norm.x, Norm.y, Norm.z);
+            //DWORD newColor = addColors(getNewColor(colorDiff, Id), getNewColor(blue, constLight));
             if (zbuffer_f[ind]>frag_depth) continue;
             zbuffer_f[ind] = frag_depth;
-            //buffer[ind] = addColors(addColors(getNewColor(color, Is), getNewColor(color, Id)), getNewColor(color, constLight));
-            buffer[ind] = addColors(getNewColor(color, Id), getNewColor(color, constLight));
+            buffer[ind] = newColor;
         }
     }
 }
@@ -461,8 +476,7 @@ unsigned int frames = 0;
 double  frameRate = 60;
 double  averageFrameTimeMilliseconds = 33.333;
 bool rerender = true;
-const COLORREF rgbWhite = 0x00FFFFFF;
-const COLORREF rgbBlack = 0x00000000;
+
 
 bool chained = true;
 int lightMode = 0;
@@ -487,7 +501,7 @@ void MainWindow::OnPaint()
             for (size_t i = 0; i < height; i++) {
                 for (size_t j = 0; j < width; j++) {
                     int ind = i * width + j;
-                    buffer[ind] = 255;
+                    buffer[ind] = rgbWhite;
                     zbuffer[ind] = -100000;
                     zbuffer_f[ind] = -100000.f;
                 }
@@ -497,13 +511,14 @@ void MainWindow::OnPaint()
             finalMatrix = Viewport * Projection * ModelView;
             modelViewProjection = Projection * ModelView;
             size_t size = faces.size();
+
             if (chained) {
                 const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
                     [](const size_t i)
                     {
                         Vec4f screen_coords[3];
                         Face face = faces[i];
-                        if ((face.normal * camera.getFront()) + 1.0f < 0) {
+                        if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
                             return;
                         }
                         for (size_t j = 0; j < 3; j++) {
@@ -515,7 +530,7 @@ void MainWindow::OnPaint()
                             Vec3i a2 = screen_coords[(j + 1) % 3];
                             drawLine(a1[0], a1[1], a2[0], a2[1], rgbBlack);
                         }
-                    },8 );
+                    });
                 loop_future.wait();
             }
             if (lightMode == 1) {
@@ -524,7 +539,7 @@ void MainWindow::OnPaint()
                     {
                         Vec4f screen_coords[3];
                         Face face = faces[i];
-                        if ((face.normal * camera.getFront()) + 1.0f < 0) {
+                        if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
                             return;
                         }
                         for (size_t j = 0; j < 3; j++) {
@@ -532,9 +547,9 @@ void MainWindow::OnPaint()
                             screen_coords[j] = screen_coords[j] / screen_coords[j].w;
                             screen_coords[j][2] = (1.0f - screen_coords[j][2]) * 10000.f;
                         }
-                        rasterize(screen_coords[0], screen_coords[1], screen_coords[2], rgbWhite);
+                        rasterize(screen_coords[0], screen_coords[1], screen_coords[2], blue);
 
-                    }, 8);
+                    });
                 loop_future.wait();
             }
             if (lightMode == 2) {
@@ -543,7 +558,7 @@ void MainWindow::OnPaint()
                     {
                         Vec4f screen_coords[3];
                         Face face = faces[i];
-                        if ((face.normal * camera.getFront()) + 1.0f < 0) {
+                        if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
                             return;
                         }
                         for (size_t j = 0; j < 3; j++) {
@@ -554,39 +569,20 @@ void MainWindow::OnPaint()
                         float colorMultiplier = (face.normal * (light * -1)) + constLight;
                         if (colorMultiplier > 1.0f) colorMultiplier = 1.0f;
                         if (colorMultiplier < constLight) colorMultiplier = constLight;
-                        COLORREF color = RGB(GetRValue(rgbWhite) * colorMultiplier, GetGValue(rgbWhite) * colorMultiplier, GetBValue(rgbWhite) * colorMultiplier);
+                        COLORREF color = RGB(GetRValue(blue) * colorMultiplier, GetGValue(blue) * colorMultiplier, GetBValue(blue) * colorMultiplier);
                         rasterize(screen_coords[0], screen_coords[1], screen_coords[2], color);
-                    }, 8);
+                    });
                 loop_future.wait();
             }
             if (lightMode == 3) {
                 const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
                     [](const size_t i)
                     {
-                        /*
-                        Vec4f global_coords[3];
-                        Vec4f not_norm_screen_coords[3];
-                        Vec4f screen_coords[3];
-                        Vec3f normals[3];
-                        Face face = faces[i];
-                        if ((face.normal * camera.getFront()) + 1.0f < 0) {
-                            return;
-                        }
-                        for (size_t j = 0; j < 3; j++) {
-                            global_coords[j] = vertexes[face.points[j].vertexInd];
-                            not_norm_screen_coords[j] = finalMatrix * global_coords[j];
-                            screen_coords[j] = not_norm_screen_coords[j] / not_norm_screen_coords[j].w;
-                            screen_coords[j][2] = (1.0f - screen_coords[j][2]) * 10000.f;
-                            normals[j] = face.points[j].normal;
-                        }
-                        rasterize(global_coords, not_norm_screen_coords, screen_coords[0], screen_coords[1], screen_coords[2], normals[0], normals[1], normals[2], rgbWhite);
-                        */
-
                         mat<4, 3, float> global_coords;
                         mat<3,3,float> normals;
                         Face face = faces[i];
                         mat<4,3,float> res;
-                        if ((face.normal * camera.getFront()) + 1.0f < 0) {
+                        if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
                             return;
                         }
                         for (size_t j = 0; j < 3; j++) {
@@ -594,9 +590,28 @@ void MainWindow::OnPaint()
                             res.set_col(j, modelViewProjection * vertexes[face.points[j].vertexInd]);
                             normals.set_col(j,face.points[j].normal);
                         }
-                        rasterize(res, normals, global_coords, rgbWhite);
-                    }, 8);
+                        rasterize(res, normals, global_coords, blue, rgbWhite);
+                    });
                 loop_future.wait();
+
+                /*
+                for (int i = 0; i < faces.size(); i++) {
+                    mat<4, 3, float> global_coords;
+                    mat<3, 3, float> normals;
+                    Face face = faces[i];
+                    mat<4, 3, float> res;
+                    if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
+                        continue;
+                        //return;
+                    }
+                    for (size_t j = 0; j < 3; j++) {
+                        global_coords.set_col(j, vertexes[face.points[j].vertexInd]);
+                        res.set_col(j, modelViewProjection * vertexes[face.points[j].vertexInd]);
+                        normals.set_col(j, face.points[j].normal);
+                    }
+                    rasterize(res, normals, global_coords, blue, rgbWhite);
+                }
+                */
             }
             hr = bitmap->CopyFromMemory(&winSize, buffer, width * 4);
             rerender = false;
@@ -637,7 +652,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_MOUSEWHEEL:
     {
         short zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
-        if (camera.updateRadius(zDelta / 2400.0f)) rerender = true;
+        if (camera.updateRadius(camera.cameraR * (zDelta / 2400.0f))) rerender = true;
         break;
     }
     case WM_LBUTTONDOWN:
