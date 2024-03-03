@@ -157,6 +157,7 @@
     <ClInclude Include="Lab1.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
+    <ClInclude Include="tgaimage.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="basewin.cpp" />
@@ -164,6 +165,7 @@
     <ClCompile Include="engine.cpp" />
     <ClCompile Include="geometry.cpp" />
     <ClCompile Include="Lab1.cpp" />
+    <ClCompile Include="tgaimage.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Lab1.rc" />

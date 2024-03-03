@@ -7,6 +7,7 @@
 #include "geometry.h"
 #include "engine.h"
 #include "camera.h"
+#include "tgaimage.h"
 
 #include "BS_thread_pool.hpp"
 
@@ -17,16 +18,17 @@
 #include <map>
 #include "basewin.h"
 
-#define MAX_LOADSTRING 100
+#define MAX_LOADSTRING 100  
 
 // Global Variables:
 HINSTANCE hInst;                                // current instance
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 HWND win;
-std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\car.obj";
+std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\Models\\Intergalactic Spaceship\\Intergalactic_Spaceship.obj";
 
 BS::thread_pool pool(12);
+
 
 struct Point {
     int vertexInd = 0;
@@ -41,6 +43,46 @@ struct Face {
 std::vector<Face> faces;
 std::vector<Vec4f> vertexes;
 std::vector<Vec3f> normalies;
+std::vector<Vec3f> texturesCord;
+
+TGAImage diffusemap_;
+TGAImage normalmap_;
+TGAImage specularmap_;
+TGAImage lightmap_;
+
+void load_texture(std::string filename, const char* suffix, TGAImage& img) {
+    std::string texfile(filename);
+    size_t dot = texfile.find_last_of(".");
+    if (dot != std::string::npos) {
+        texfile = texfile.substr(0, dot) + std::string(suffix);
+        std::cerr << "texture file " << texfile << " loading " << (img.read_tga_file(texfile.c_str()) ? "ok" : "failed") << std::endl;
+        img.flip_vertically();
+    }
+}
+
+TGAColor diffuse(Vec2f uvf) {
+    Vec2i uv(uvf[0] * diffusemap_.get_width(), uvf[1] * diffusemap_.get_height());
+    return diffusemap_.get(uv[0], uv[1]);
+}
+
+TGAColor light_map(Vec2f uvf) {
+    Vec2i uv(uvf[0] * lightmap_.get_width(), uvf[1] * lightmap_.get_height());
+    return lightmap_.get(uv[0], uv[1]);
+}
+
+Vec3f normal(Vec2f uvf) {
+    Vec2i uv(uvf[0] * normalmap_.get_width(), uvf[1] * normalmap_.get_height());
+    TGAColor c = normalmap_.get(uv[0], uv[1]);
+    Vec3f res;
+    for (int i = 0; i < 3; i++)
+        res[2 - i] = (float)c[i] / 255.f * 2.f - 1.f;
+    return res;
+}
+
+float specular(Vec2f uvf) {
+    Vec2i uv(uvf[0] * specularmap_.get_width(), uvf[1] * specularmap_.get_height());
+    return specularmap_.get(uv[0], uv[1])[0] / 1.f;
+}
 
 Vec3f calculateNormal(Face face) {
     return cross((Vec3f)(vertexes[face.points[2].vertexInd] - vertexes[face.points[0].vertexInd]), (Vec3f)(vertexes[face.points[1].vertexInd] - vertexes[face.points[0].vertexInd])).normalize();
@@ -55,13 +97,16 @@ float znear = 0.1f;
 float lastX = 400, lastY = 300;
 float constLight = .1f;
 
-Camera camera{5,  3.141557f / 2 ,  3.141557f / 2 , Vec4f(0.0f , 0.0f , 0.0f, 1)};
+Camera camera{10,  3.141557f / 2 ,  3.141557f / 2 , Vec4f(0.0f , 0.0f , 0.0f, 1)};
 Vec3f light{ 1.0f, 1.0f, 1.0f};
-Vec3f lightPos{ 0.0f, 3.0f, 0.f };
+Vec3f lightPos{ 5.0f, 5.0f, 5.0f };
 
 DWORD* buffer;
 int* zbuffer;
 float* zbuffer_f;
+DWORD** bloom_buffer;
+
+CRITICAL_SECTION* sync_buffer;
 
 template <class T> void SafeRelease(T** ppT)
 {
@@ -104,6 +149,7 @@ public:
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
 
     MainWindow win;
+    hInst = hInstance;
 
     if (!win.Create(L"Engine", WS_POPUP))
     {
@@ -127,6 +173,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
                 sscanf_s(line.c_str(), "vn %f %f %f", &normal.x, &normal.y, &normal.z);
                 normalies.push_back(normal.normalize());
             }
+            if (line.substr(0, 3) == "vt ") {
+                Vec3f texture;
+                sscanf_s(line.c_str(), "vt %f %f %f", &texture.x, &texture.y, &texture.z);
+                texturesCord.push_back(texture);
+            }
             if (line.substr(0, 2) == "f ") {
                 Face face;
                 std::istringstream v(line.substr(2));
@@ -137,6 +188,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
                     int normalInd = -1;
                     sscanf_s(token.c_str(), "%i/%i/%i", &p.vertexInd, &p.textureInd, &normalInd);
                     p.vertexInd = p.vertexInd - 1;
+                    p.textureInd = p.textureInd - 1;
                     if (normalInd > 0) p.normal = normalies[normalInd - 1];
                     face.points[ind] = p;
                     ind++;
@@ -172,6 +224,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
             }
         }
     }
+
+    load_texture(filePath, "_diffuse.tga", diffusemap_);
+    load_texture(filePath, "_nm.tga", normalmap_);
+    load_texture(filePath, "_spec.tga", specularmap_);
+    load_texture(filePath, "_emi.tga", lightmap_);
 
     light = light.normalize();
 
@@ -220,7 +277,6 @@ HRESULT MainWindow::CreateGraphicsResources()
                 L"en-us",
                 &pTextFormat_
             );
-            // Center align (horizontally) the text.
             if (SUCCEEDED(hr))
             {
                 hr = pTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -245,7 +301,7 @@ HRESULT MainWindow::CreateGraphicsResources()
 
         if (SUCCEEDED(hr))
         {
-            const D2D1_COLOR_F color = D2D1::ColorF(1.0f, 1.0f, 1.0f);
+            const D2D1_COLOR_F color = D2D1::ColorF(0.0f, 0.0f, 0.0f);
             hr = pRenderTarget->CreateSolidColorBrush(color, &pBrush);
 
             D2D1_SIZE_U size = pRenderTarget->GetPixelSize();
@@ -261,6 +317,15 @@ HRESULT MainWindow::CreateGraphicsResources()
             buffer = new DWORD[width * height];
             zbuffer = new int[width * height];
             zbuffer_f = new float[width * height];
+            sync_buffer = new CRITICAL_SECTION[width * height];
+
+            bloom_buffer = new DWORD*[2];
+            bloom_buffer[0] = new DWORD[width * height];
+            bloom_buffer[1] = new DWORD[width * height];
+
+            for (int i = 0; i < width * height; i++) {
+                InitializeCriticalSection(&sync_buffer[i]);
+            }
 
             maxInd = width * height;
 
@@ -325,27 +390,6 @@ void drawLine(int x0, int y0, int x1, int y1, COLORREF color) {
     }
 }
 
-COLORREF getNewColor(COLORREF color, float koef) {
-    if (koef > 1.f) koef = 1.0f;
-    if (koef < 0) koef = 0.0f;
-    return RGB(GetRValue(color) * koef, GetGValue(color) * koef, GetBValue(color) * koef);
-}
-
-COLORREF addColors(COLORREF a1, COLORREF a2) {
-    BYTE R = GetRValue(a1);
-    BYTE G = GetGValue(a1);
-    BYTE B = GetBValue(a1);
-
-    BYTE R1 = GetRValue(a2);
-    BYTE G1 = GetGValue(a2);
-    BYTE B1 = GetBValue(a2);
-
-    int(R) + R1 > 254 ? R = 254 : R = R + R1;
-    int(G) + G1 > 254 ? G = 254 : G = G + G1;
-    int(B) + B1 > 254 ? B = 254 : B = B + B1;
-
-    return RGB(R, G, B);
-}
 
 Vec3f barycentric(Vec2f A, Vec2f B, Vec2f C, Vec2f P) {
     Vec3f s[2];
@@ -360,73 +404,98 @@ Vec3f barycentric(Vec2f A, Vec2f B, Vec2f C, Vec2f P) {
     return Vec3f(-1, 1, 1);
 }
 
+/*
+Vec3f barycentric( Vec2f a, Vec2f b, Vec2f c, Vec2f p)
+{
+    Vec3f res;
+    Vec2f v0 = b - a, v1 = c - a, v2 = p - a;
+    float d00 = v0 * v0;
+    float d01 = v0 * v1;
+    float d11 = v1 * v1;
+    float d20 = v2 * v0;
+    float d21 = v2 * v1;
+    float denom = d00 * d11 - d01 * d01;
+    res[1] = (d11 * d20 - d01 * d21) / denom;
+    res[2] = (d00 * d21 - d01 * d20) / denom;
+    res[0] = 1.0f - res[1] - res[2];
+    return res;
+}
+*/
+
 
 COLORREF blue = 0x000000FF;
 const COLORREF rgbWhite = 0x00FFFFFF;
 const COLORREF rgbBlack = 0x00000000;
 const COLORREF back = 0x000000FF;
+const COLORREF gold = 0x00FFE39D;
+Vec3i white(255, 255, 255);
 
-void rasterize(mat<4,3,float> &clipc, mat<3,3,float> vn, mat<4,3,float> global, COLORREF colorDiff, COLORREF color) {
+void rasterize(mat<4, 3, float>& clipc, mat<3, 3, float> vn, mat<3, 3, float> global, mat<3, 3, float> textures, COLORREF colorDiff, COLORREF color) {
     mat<3, 4, float> pts = (Viewport * clipc).transpose();
     mat<3, 2, float> pts2;
     for (int i = 0; i < 3; i++) pts2[i] = proj<2>(pts[i] / pts[i][3]);
 
-    //int ind0 = 0, ind1 = 1, ind2 = 2;
-    Vec2i t0 = pts2[0], t1 = pts2[1], t2 = pts2[2];
-    if (t0.y == t1.y && t0.y == t2.y) return;
-    if (t0.y > t1.y) { std::swap(t0, t1); }
-    if (t0.y > t2.y) { std::swap(t0, t2); }
-    if (t1.y > t2.y) { std::swap(t1, t2); }
-    int total_height = t2.y - t0.y;
-
-    for (int i = 0; i < total_height; i++) {
-        bool second_half = i > t1.y - t0.y || t1.y == t0.y;
-        int segment_height = second_half ? t2.y - t1.y : t1.y - t0.y;
-
-        float alpha = (float)i / total_height;
-        float beta = (float)(i - (second_half ? t1.y - t0.y : 0)) / segment_height;
-        Vec2f A = (Vec2f)t0 + Vec2f(t2 - t0) * alpha;
-        Vec2f B = second_half ? (Vec2f)t1 + Vec2f(t2 - t1) * beta : (Vec2f)t0 + Vec2f(t1 - t0) * beta;
-
-        if (A.x > B.x) { std::swap(A, B); }
-        Vec2f C = B - A;
-
-        for (int j = 0; j <= C.x; j++) {
-            float phi = j == C.x ? 1.f : (float)j / C.x;
-            Vec2i P = Vec2f(A) + C * phi;
-
-            if (P.x < 0 || P.y < 0 || P.x >= width || P.y >= height) {
-                continue;
-            }
-
+    Vec2f bboxmin(width, height);
+    Vec2f bboxmax(0, 0);
+    Vec2f clamp(width - 1, height - 1);
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 2; j++) {
+            bboxmin[j] = std::max<float>(0.f, std::min<float>(bboxmin[j], pts2[i][j]));
+            bboxmax[j] = std::min<float>(clamp[j], std::max<float>(bboxmax[j], pts2[i][j]));
+        }
+    }
+    Vec2i P;
+    for (P.x = bboxmin.x; P.x <= bboxmax.x; P.x++) {
+        for (P.y = bboxmin.y; P.y <= bboxmax.y; P.y++) {
             Vec3f bc_screen = barycentric(pts2[0], pts2[1], pts2[2], P);
             Vec3f bc_clip = Vec3f(bc_screen.x / pts[0][3], bc_screen.y / pts[1][3], bc_screen.z / pts[2][3]);
             bc_clip = bc_clip / (bc_clip.x + bc_clip.y + bc_clip.z);
             float frag_depth = 1.0f - clipc[2] * bc_clip;
 
+            if (bc_screen.x < 0 || bc_screen.y < 0 || bc_screen.z<0) continue;
+
+            Vec2f textureCoords{ textures[0] * bc_clip, textures[1] * bc_clip };
+            TGAColor new_color = diffuse(textureCoords);
+
             Vec3f Norm{ vn[0] * bc_clip, vn[1] * bc_clip , vn[2] * bc_clip };
             Norm = Norm.normalize();
+            //Vec3f Norm = normal(textureCoords);
+                        
             Vec3f globalCoords{ global[0] * bc_clip, global[1] * bc_clip , global[2] * bc_clip };
-
-            //Vec3f negLight = light;
             Vec3f negLight = (lightPos - globalCoords).normalize();
-            float Id = (Norm * negLight);
-            
-            //float Is = pow((R * ((Vec3f)camera.getEye() - globalCoords).normalize()), 128.0f);
+
+            float diff = 1.0f * (Norm * negLight);
+            if (diff < 0) diff = 0.0f;
 
             Vec3f viewDir = ((Vec3f)camera.getEye() - globalCoords).normalize();
             Vec3f R = (Norm * (Norm * negLight) - negLight).normalize();
-            float specularStrength = 5.0f;
-            float spec = specularStrength * pow(max((viewDir * R), 0.0f), 32.0f);
+            //float spec = 10.0f * pow(max((viewDir * R), 0.0f), specular(textureCoords));
+            float spec = 0.0f * pow(max((viewDir * R), 0.0f), 64.0f);
+            if (spec < 0) spec = 0.0f;
+            for (int i = 0; i < 3; i++) {
+                new_color[i] = std::min<unsigned char>(10 + new_color[i] * (diff)+white[i] * spec, 255);
+            }
+
+            TGAColor light_color = light_map(textureCoords);
+            if (!(light_color.bgra[0] != 0.0f || light_color.bgra[1] != 0.0f || light_color.bgra[2] != 0.0f) && (spec + diff > 3.0f)) {
+                light_color = new_color;
+            }
 
             int ind = P.x + P.y * width;
-            DWORD newColor = addColors(addColors(getNewColor(color, spec), getNewColor(colorDiff, Id)), getNewColor(rgbWhite, constLight));
+            EnterCriticalSection(&sync_buffer[ind]);
+            if (zbuffer_f[ind] <= frag_depth) {
+                zbuffer_f[ind] = frag_depth;
 
-            //newColor = RGB(Norm.x, Norm.y, Norm.z);
-            //DWORD newColor = addColors(getNewColor(colorDiff, Id), getNewColor(blue, constLight));
-            if (zbuffer_f[ind]>frag_depth) continue;
-            zbuffer_f[ind] = frag_depth;
-            buffer[ind] = newColor;
+                if (light_color.bgra[0] != 0.0f || light_color.bgra[1] != 0.0f || light_color.bgra[2] != 0.0f) {
+                    new_color = light_color;
+                    bloom_buffer[0][ind] = *(DWORD*)new_color.bgra;
+                    bloom_buffer[1][ind] = *(DWORD*)new_color.bgra;
+                }
+
+                buffer[ind] = *(DWORD*)new_color.bgra;
+
+            }
+            LeaveCriticalSection(&sync_buffer[ind]);
         }
     }
 }
@@ -447,6 +516,8 @@ void rasterize(Vec3i t0, Vec3i t1, Vec3i t2, COLORREF color) {
         Vec3i A = (Vec3f)t0 + Vec3f(t2 - t0) * alpha;
         Vec3i B = second_half ? (Vec3f)t1 + Vec3f(t2 - t1) * beta : (Vec3f)t0 + Vec3f(t1 - t0) * beta;
 
+        if (A.y < 0 || A.y >= height) continue;
+        if ((A.x < 0 && B.x < 0) || (A.x >= width && B.x >= width)) continue;
         if (A.x > B.x) {std::swap(A, B);}
         Vec3f C = B - A;
 
@@ -458,11 +529,62 @@ void rasterize(Vec3i t0, Vec3i t1, Vec3i t2, COLORREF color) {
                 continue;
             }
             int idx = P.x + P.y * width;
+
+            EnterCriticalSection(&sync_buffer[idx]);
             if (zbuffer[idx] < P.z) {
                 zbuffer[idx] = P.z;
                 buffer[idx] = color;
             }
+            LeaveCriticalSection(&sync_buffer[idx]);
         }
+    }
+}
+
+
+float weight[5]{ 0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216 };
+
+Vec3i texture(DWORD* buf, Vec2i coords) {
+    if (coords.x < 0 || coords.y < 0 || coords.x >= width || coords.y >= height) {
+        return Vec3i(0, 0, 0);
+    }
+    COLORREF res = buf[coords.x + coords.y * width];
+    return Vec3i(GetRValue(res), GetGValue(res), GetBValue(res));
+}
+
+void guassian(DWORD* buf, DWORD* bufOut, Vec2i TexCoords, bool horizontal) {
+    Vec3i result = texture(buf, TexCoords) * weight[0];
+    if (horizontal)
+    {
+        for (int i = 1; i < 5; ++i)
+        {
+            result = result + texture(buf, TexCoords + Vec2i(1 * i, 0)) * weight[i];
+            result = result + texture(buf, TexCoords - Vec2i(1 * i, 0)) * weight[i];
+        }
+    }
+    else
+    {
+        for (int i = 1; i < 5; ++i)
+        {
+            result = result + texture(buf, TexCoords + Vec2i(0, 1 * i)) * weight[i];
+            result = result + texture(buf, TexCoords - Vec2i(0, 1 * i)) * weight[i];
+        }
+    }
+    bufOut[TexCoords.x + TexCoords.y * width] = RGB(result.x, result.y, result.z);
+}
+
+void bloom() {
+    bool horizontal = true, first_iteration = true;
+    int amount = 10;
+    for (unsigned int i = 0; i < amount; i++)
+    {
+        for (int j = 0; j < width; j++) {
+            for (int k = 0; k < height; k++) {
+                guassian(first_iteration ? bloom_buffer[1] : bloom_buffer[!horizontal], bloom_buffer[horizontal], Vec2i(j,k), horizontal);
+            }
+        }
+        horizontal = !horizontal;
+        if (first_iteration)
+            first_iteration = false;
     }
 }
 
@@ -523,6 +645,9 @@ void MainWindow::OnPaint()
                         }
                         for (size_t j = 0; j < 3; j++) {
                             screen_coords[j] = finalMatrix * vertexes[face.points[j].vertexInd];
+                            if (screen_coords[j].w < 0) {
+                                return;
+                            }
                             screen_coords[j] = screen_coords[j] / screen_coords[j].w;
                         }
                         for (int j = 0; j < 3; j++) {
@@ -544,6 +669,9 @@ void MainWindow::OnPaint()
                         }
                         for (size_t j = 0; j < 3; j++) {
                             screen_coords[j] = finalMatrix * vertexes[face.points[j].vertexInd];
+                            if (screen_coords[j].w < 0) {
+                                return;
+                            }
                             screen_coords[j] = screen_coords[j] / screen_coords[j].w;
                             screen_coords[j][2] = (1.0f - screen_coords[j][2]) * 10000.f;
                         }
@@ -563,13 +691,17 @@ void MainWindow::OnPaint()
                         }
                         for (size_t j = 0; j < 3; j++) {
                             screen_coords[j] = finalMatrix * vertexes[face.points[j].vertexInd];
+                            if (screen_coords[j].w < 0) {
+                                return;
+                            }
                             screen_coords[j] = screen_coords[j] / screen_coords[j].w;
                             screen_coords[j][2] = (1.0f - screen_coords[j][2]) * 10000.f;
                         }
+
                         float colorMultiplier = (face.normal * (light * -1)) + constLight;
                         if (colorMultiplier > 1.0f) colorMultiplier = 1.0f;
                         if (colorMultiplier < constLight) colorMultiplier = constLight;
-                        COLORREF color = RGB(GetRValue(blue) * colorMultiplier, GetGValue(blue) * colorMultiplier, GetBValue(blue) * colorMultiplier);
+                        COLORREF color = RGB(GetRValue(gold) * colorMultiplier, GetGValue(gold) * colorMultiplier, GetBValue(gold) * colorMultiplier);
                         rasterize(screen_coords[0], screen_coords[1], screen_coords[2], color);
                     });
                 loop_future.wait();
@@ -578,8 +710,9 @@ void MainWindow::OnPaint()
                 const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
                     [](const size_t i)
                     {
-                        mat<4, 3, float> global_coords;
+                        mat<3, 3, float> global_coords;
                         mat<3,3,float> normals;
+                        mat<3, 3, float> textures;
                         Face face = faces[i];
                         mat<4,3,float> res;
                         if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
@@ -587,12 +720,24 @@ void MainWindow::OnPaint()
                         }
                         for (size_t j = 0; j < 3; j++) {
                             global_coords.set_col(j, vertexes[face.points[j].vertexInd]);
+                            textures.set_col(j, texturesCord[face.points[j].textureInd]);
                             res.set_col(j, modelViewProjection * vertexes[face.points[j].vertexInd]);
                             normals.set_col(j,face.points[j].normal);
                         }
-                        rasterize(res, normals, global_coords, blue, rgbWhite);
+                        rasterize(res, normals, global_coords, textures, gold, gold);
                     });
                 loop_future.wait();
+
+                /*
+                bloom();
+
+                for (int i = 0; i < height; i++) {
+                    for (int j = 0; j < width; j++) {
+                        int ind = i * width + j;
+                        buffer[ind] = buffer[ind] + bloom_buffer[0][ind];
+                    }
+                }
+                */
 
                 /*
                 for (int i = 0; i < faces.size(); i++) {
@@ -649,6 +794,8 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (uMsg)
     {
+    case WM_SETCURSOR:
+        break;
     case WM_MOUSEWHEEL:
     {
         short zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
@@ -740,6 +887,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             return -1;
         }
+        SetCursor(LoadCursorW(hInst, L"IDC_ARROW"));
         break;
 
     case WM_DESTROY:
