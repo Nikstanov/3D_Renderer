@@ -60,14 +60,16 @@ void load_texture(std::string filename, const char* suffix, TGAImage& img) {
     }
 }
 
-TGAColor diffuse(Vec2f uvf) {
+Vec3f diffuse(Vec2f uvf) {
     Vec2i uv(uvf[0] * diffusemap_.get_width(), uvf[1] * diffusemap_.get_height());
-    return diffusemap_.get(uv[0], uv[1]);
+    TGAColor color = diffusemap_.get(uv[0], uv[1]);
+    return Vec3f(color[0] / 255.f, color[1] / 255.f, color[2] / 255.f);
 }
 
-TGAColor light_map(Vec2f uvf) {
+Vec3f light_map(Vec2f uvf) {
     Vec2i uv(uvf[0] * lightmap_.get_width(), uvf[1] * lightmap_.get_height());
-    return lightmap_.get(uv[0], uv[1]);
+    TGAColor color = lightmap_.get(uv[0], uv[1]);
+    return Vec3f(color[0] / 255.f, color[1] / 255.f, color[2] / 255.f);
 }
 
 Vec3f normal(Vec2f uvf) {
@@ -101,10 +103,10 @@ Camera camera{10,  3.141557f / 2 ,  3.141557f / 2 , Vec4f(0.0f , 0.0f , 0.0f, 1)
 Vec3f light{ 1.0f, 1.0f, 1.0f};
 Vec3f lightPos{ 5.0f, 5.0f, 5.0f };
 
-DWORD* buffer;
-int* zbuffer;
-float* zbuffer_f;
-DWORD** bloom_buffer;
+Vec3f* buffer;
+float* zbuffer;
+DWORD* bufferOut;
+Vec3f** bloom_buffer;
 
 CRITICAL_SECTION* sync_buffer;
 
@@ -292,7 +294,7 @@ HRESULT MainWindow::CreateGraphicsResources()
         RECT rc;
         GetClientRect(m_hwnd, &rc);
 
-        D2D1_SIZE_U size = D2D1::SizeU(rc.right, rc.bottom);
+        D2D1_SIZE_U size = D2D1::SizeU(rc.right * 2, rc.bottom * 2);
 
         hr = pFactory->CreateHwndRenderTarget(
             D2D1::RenderTargetProperties(),
@@ -314,14 +316,15 @@ HRESULT MainWindow::CreateGraphicsResources()
             D2D1_SIZE_U tempSize{ width, height };
             D2D1_BITMAP_PROPERTIES prop{ pRenderTarget->GetPixelFormat(),xSize, ySize };
             pRenderTarget->CreateBitmap(tempSize, prop, &bitmap);
-            buffer = new DWORD[width * height];
-            zbuffer = new int[width * height];
-            zbuffer_f = new float[width * height];
+
+            buffer = new Vec3f[width * height];
+            bufferOut = new DWORD[width * height];
+            zbuffer = new float[width * height];
             sync_buffer = new CRITICAL_SECTION[width * height];
 
-            bloom_buffer = new DWORD*[2];
-            bloom_buffer[0] = new DWORD[width * height];
-            bloom_buffer[1] = new DWORD[width * height];
+            bloom_buffer = new Vec3f*[2];
+            bloom_buffer[0] = new Vec3f[width * height];
+            bloom_buffer[1] = new Vec3f[width * height];
 
             for (int i = 0; i < width * height; i++) {
                 InitializeCriticalSection(&sync_buffer[i]);
@@ -349,14 +352,14 @@ void MainWindow::DiscardGraphicsResources()
     SafeRelease(&pBrush);
 }
 
-void inline setPixel(int x, int y, COLORREF color) {
+void inline setPixel(int x, int y, Vec3f color) {
     if (x < 0 || y < 0 || x >= width || y >= height) {
         return;
     }
     buffer[y * width + x] = color;
 }
 
-void drawLine(int x0, int y0, int x1, int y1, COLORREF color) {
+void drawLine(int x0, int y0, int x1, int y1, Vec3f color) {
     bool steep = false; 
     if (std::abs(x0 - x1) < std::abs(y0 - y1)) {
         std::swap(x0, y0);
@@ -390,7 +393,6 @@ void drawLine(int x0, int y0, int x1, int y1, COLORREF color) {
     }
 }
 
-
 Vec3f barycentric(Vec2f A, Vec2f B, Vec2f C, Vec2f P) {
     Vec3f s[2];
     for (int i = 2; i--; ) {
@@ -404,33 +406,15 @@ Vec3f barycentric(Vec2f A, Vec2f B, Vec2f C, Vec2f P) {
     return Vec3f(-1, 1, 1);
 }
 
-/*
-Vec3f barycentric( Vec2f a, Vec2f b, Vec2f c, Vec2f p)
-{
-    Vec3f res;
-    Vec2f v0 = b - a, v1 = c - a, v2 = p - a;
-    float d00 = v0 * v0;
-    float d01 = v0 * v1;
-    float d11 = v1 * v1;
-    float d20 = v2 * v0;
-    float d21 = v2 * v1;
-    float denom = d00 * d11 - d01 * d01;
-    res[1] = (d11 * d20 - d01 * d21) / denom;
-    res[2] = (d00 * d21 - d01 * d20) / denom;
-    res[0] = 1.0f - res[1] - res[2];
-    return res;
-}
-*/
-
-
-COLORREF blue = 0x000000FF;
 const COLORREF rgbWhite = 0x00FFFFFF;
 const COLORREF rgbBlack = 0x00000000;
-const COLORREF back = 0x000000FF;
-const COLORREF gold = 0x00FFE39D;
-Vec3i white(255, 255, 255);
 
-void rasterize(mat<4, 3, float>& clipc, mat<3, 3, float> vn, mat<3, 3, float> global, mat<3, 3, float> textures, COLORREF colorDiff, COLORREF color) {
+Vec3f blue(0.0f,0.0f,1.0f);
+Vec3f black(0.0f, 0.0f, 0.0f);
+Vec3f gold(1.0f, 0.6f, 0.3f);
+Vec3f white(1.0f, 1.0f, 1.0f);
+
+void rasterize(mat<4, 3, float>& clipc, mat<3, 3, float> vn, mat<3, 3, float> global, mat<3, 3, float> textures, Vec3f defColor, Vec3f specColor) {
     mat<3, 4, float> pts = (Viewport * clipc).transpose();
     mat<3, 2, float> pts2;
     for (int i = 0; i < 3; i++) pts2[i] = proj<2>(pts[i] / pts[i][3]);
@@ -455,11 +439,11 @@ void rasterize(mat<4, 3, float>& clipc, mat<3, 3, float> vn, mat<3, 3, float> gl
             if (bc_screen.x < 0 || bc_screen.y < 0 || bc_screen.z<0) continue;
 
             Vec2f textureCoords{ textures[0] * bc_clip, textures[1] * bc_clip };
-            TGAColor new_color = diffuse(textureCoords);
+            Vec3f new_color = diffuse(textureCoords);
 
             Vec3f Norm{ vn[0] * bc_clip, vn[1] * bc_clip , vn[2] * bc_clip };
-            Norm = Norm.normalize();
-            //Vec3f Norm = normal(textureCoords);
+            //Norm = Norm.normalize();
+            Norm = normal(textureCoords);
                         
             Vec3f globalCoords{ global[0] * bc_clip, global[1] * bc_clip , global[2] * bc_clip };
             Vec3f negLight = (lightPos - globalCoords).normalize();
@@ -469,30 +453,27 @@ void rasterize(mat<4, 3, float>& clipc, mat<3, 3, float> vn, mat<3, 3, float> gl
 
             Vec3f viewDir = ((Vec3f)camera.getEye() - globalCoords).normalize();
             Vec3f R = (Norm * (Norm * negLight) - negLight).normalize();
-            //float spec = 10.0f * pow(max((viewDir * R), 0.0f), specular(textureCoords));
-            float spec = 0.0f * pow(max((viewDir * R), 0.0f), 64.0f);
+            float spec = 10.0f * pow(max((viewDir * R), 0.0f), specular(textureCoords));
+            //float spec = 1.0f * pow(max((viewDir * R), 0.0f), 64.0f);
             if (spec < 0) spec = 0.0f;
+
             for (int i = 0; i < 3; i++) {
-                new_color[i] = std::min<unsigned char>(10 + new_color[i] * (diff)+white[i] * spec, 255);
+                new_color[i] = 0.1f + new_color[i] * diff + specColor[i] * spec;
             }
 
-            TGAColor light_color = light_map(textureCoords);
-            if (!(light_color.bgra[0] != 0.0f || light_color.bgra[1] != 0.0f || light_color.bgra[2] != 0.0f) && (spec + diff > 3.0f)) {
-                light_color = new_color;
-            }
+            Vec3f light_color = light_map(textureCoords);
 
             int ind = P.x + P.y * width;
             EnterCriticalSection(&sync_buffer[ind]);
-            if (zbuffer_f[ind] <= frag_depth) {
-                zbuffer_f[ind] = frag_depth;
+            if (zbuffer[ind] <= frag_depth) {
+                zbuffer[ind] = frag_depth;
 
-                if (light_color.bgra[0] != 0.0f || light_color.bgra[1] != 0.0f || light_color.bgra[2] != 0.0f) {
-                    new_color = light_color;
-                    bloom_buffer[0][ind] = *(DWORD*)new_color.bgra;
-                    bloom_buffer[1][ind] = *(DWORD*)new_color.bgra;
+                if (light_color[0] > 0.0f || light_color[1] > 0.0f || light_color[2] > 0.0f) {
+                    new_color = light_color * 5.0f;
+                    bloom_buffer[0][ind] = new_color;
                 }
 
-                buffer[ind] = *(DWORD*)new_color.bgra;
+                buffer[ind] = new_color;
 
             }
             LeaveCriticalSection(&sync_buffer[ind]);
@@ -500,7 +481,7 @@ void rasterize(mat<4, 3, float>& clipc, mat<3, 3, float> vn, mat<3, 3, float> gl
     }
 }
 
-void rasterize(Vec3i t0, Vec3i t1, Vec3i t2, COLORREF color) {
+void rasterize(Vec3i t0, Vec3i t1, Vec3i t2, Vec3f color) {
     if (t0.y == t1.y && t0.y == t2.y) return;
     if (t0.y > t1.y) {std::swap(t0, t1);}
     if (t0.y > t2.y) {std::swap(t0, t2);}
@@ -543,16 +524,16 @@ void rasterize(Vec3i t0, Vec3i t1, Vec3i t2, COLORREF color) {
 
 float weight[5]{ 0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216 };
 
-Vec3i texture(DWORD* buf, Vec2i coords) {
+
+Vec3f texture(Vec3f* buf, Vec2i coords) {
     if (coords.x < 0 || coords.y < 0 || coords.x >= width || coords.y >= height) {
         return Vec3i(0, 0, 0);
     }
-    COLORREF res = buf[coords.x + coords.y * width];
-    return Vec3i(GetRValue(res), GetGValue(res), GetBValue(res));
+    return buf[coords.x + coords.y * width];
 }
 
-void guassian(DWORD* buf, DWORD* bufOut, Vec2i TexCoords, bool horizontal) {
-    Vec3i result = texture(buf, TexCoords) * weight[0];
+void guassian(Vec3f* buf, Vec3f* bufOut, Vec2i TexCoords, bool horizontal) {
+    Vec3f result = texture(buf, TexCoords) * weight[0];
     if (horizontal)
     {
         for (int i = 1; i < 5; ++i)
@@ -569,24 +550,28 @@ void guassian(DWORD* buf, DWORD* bufOut, Vec2i TexCoords, bool horizontal) {
             result = result + texture(buf, TexCoords - Vec2i(0, 1 * i)) * weight[i];
         }
     }
-    bufOut[TexCoords.x + TexCoords.y * width] = RGB(result.x, result.y, result.z);
+    bufOut[TexCoords.x + TexCoords.y * width] = result;
 }
 
 void bloom() {
     bool horizontal = true, first_iteration = true;
-    int amount = 10;
+    int amount = 6;
     for (unsigned int i = 0; i < amount; i++)
     {
-        for (int j = 0; j < width; j++) {
-            for (int k = 0; k < height; k++) {
-                guassian(first_iteration ? bloom_buffer[1] : bloom_buffer[!horizontal], bloom_buffer[horizontal], Vec2i(j,k), horizontal);
-            }
-        }
+        const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, width,
+            [first_iteration, horizontal](const size_t x)
+            {
+                for (int y = 0; y < height; y++) {
+                    guassian(first_iteration ? bloom_buffer[0] : bloom_buffer[!horizontal], bloom_buffer[horizontal], Vec2i(x,y), horizontal);
+                }
+            });
+        loop_future.wait();
         horizontal = !horizontal;
         if (first_iteration)
             first_iteration = false;
     }
 }
+
 
 
 double clockToMilliseconds(clock_t ticks) {
@@ -623,9 +608,10 @@ void MainWindow::OnPaint()
             for (size_t i = 0; i < height; i++) {
                 for (size_t j = 0; j < width; j++) {
                     int ind = i * width + j;
-                    buffer[ind] = rgbWhite;
-                    zbuffer[ind] = -100000;
-                    zbuffer_f[ind] = -100000.f;
+                    buffer[ind] = Vec3f(1.0f,1.0f,1.0f);
+                    zbuffer[ind] = -100000.0f;
+                    bufferOut[ind] = rgbWhite;
+                    bloom_buffer[0][ind] = Vec3f(0.0f, 0.0f, 0.0f);
                 }
             }
 
@@ -653,7 +639,7 @@ void MainWindow::OnPaint()
                         for (int j = 0; j < 3; j++) {
                             Vec3i a1 = screen_coords[j];
                             Vec3i a2 = screen_coords[(j + 1) % 3];
-                            drawLine(a1[0], a1[1], a2[0], a2[1], rgbBlack);
+                            drawLine(a1[0], a1[1], a2[0], a2[1], black);
                         }
                     });
                 loop_future.wait();
@@ -675,7 +661,7 @@ void MainWindow::OnPaint()
                             screen_coords[j] = screen_coords[j] / screen_coords[j].w;
                             screen_coords[j][2] = (1.0f - screen_coords[j][2]) * 10000.f;
                         }
-                        rasterize(screen_coords[0], screen_coords[1], screen_coords[2], blue);
+                        rasterize(screen_coords[0], screen_coords[1], screen_coords[2], Vec3f(1.0f, 1.0f, 1.0f) - blue);
 
                     });
                 loop_future.wait();
@@ -698,11 +684,9 @@ void MainWindow::OnPaint()
                             screen_coords[j][2] = (1.0f - screen_coords[j][2]) * 10000.f;
                         }
 
-                        float colorMultiplier = (face.normal * (light * -1)) + constLight;
-                        if (colorMultiplier > 1.0f) colorMultiplier = 1.0f;
-                        if (colorMultiplier < constLight) colorMultiplier = constLight;
-                        COLORREF color = RGB(GetRValue(gold) * colorMultiplier, GetGValue(gold) * colorMultiplier, GetBValue(gold) * colorMultiplier);
-                        rasterize(screen_coords[0], screen_coords[1], screen_coords[2], color);
+                        float colorMultiplier = (face.normal *  (light * -1)) + constLight;
+                        if (colorMultiplier < 0) colorMultiplier = 0;
+                        rasterize(screen_coords[0], screen_coords[1], screen_coords[2], (Vec3f(1.0f, 1.0f, 1.0f) - gold) * colorMultiplier);
                     });
                 loop_future.wait();
             }
@@ -724,41 +708,39 @@ void MainWindow::OnPaint()
                             res.set_col(j, modelViewProjection * vertexes[face.points[j].vertexInd]);
                             normals.set_col(j,face.points[j].normal);
                         }
-                        rasterize(res, normals, global_coords, textures, gold, gold);
+                        rasterize(res, normals, global_coords, textures, Vec3f(1.0f, 1.0f, 1.0f) - gold, white);
                     });
                 loop_future.wait();
-
-                /*
                 bloom();
-
-                for (int i = 0; i < height; i++) {
-                    for (int j = 0; j < width; j++) {
-                        int ind = i * width + j;
-                        buffer[ind] = buffer[ind] + bloom_buffer[0][ind];
-                    }
-                }
-                */
-
-                /*
-                for (int i = 0; i < faces.size(); i++) {
-                    mat<4, 3, float> global_coords;
-                    mat<3, 3, float> normals;
-                    Face face = faces[i];
-                    mat<4, 3, float> res;
-                    if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
-                        continue;
-                        //return;
-                    }
-                    for (size_t j = 0; j < 3; j++) {
-                        global_coords.set_col(j, vertexes[face.points[j].vertexInd]);
-                        res.set_col(j, modelViewProjection * vertexes[face.points[j].vertexInd]);
-                        normals.set_col(j, face.points[j].normal);
-                    }
-                    rasterize(res, normals, global_coords, blue, rgbWhite);
-                }
-                */
             }
-            hr = bitmap->CopyFromMemory(&winSize, buffer, width * 4);
+
+            const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, width,
+                [](const size_t x)
+                {
+                    const float gamma = 1.0f / 2.2f;
+                    const float exposure = 1.0f;
+                    for (int y = 0; y < height; y++) {
+                        int ind = x + y * width;
+                        //Vec3f rgb = bloom_buffer[0][ind];
+                        Vec3f rgb = buffer[ind] + bloom_buffer[0][ind];
+
+                        //Vec3f mapped = Vec3f(rgb[0] / (rgb[0] + 1.0f), rgb[1] / (rgb[1] + 1.0f), rgb[2] / (rgb[2] + 1.0f));
+                        //Vec3f mapped = Vec3f(rgb[0], rgb[1], rgb[2]);
+                        Vec3f mapped = Vec3f(1.0f - exp(rgb[0] * (-exposure)), 1.0f - exp(rgb[1] * (-exposure)), 1.0f - exp(rgb[2] * (-exposure)));
+                        //mapped = Vec3f(pow(mapped[0], gamma), pow(mapped[1], gamma), pow(mapped[2], gamma));
+
+
+                        for (int i = 0; i < 3; i++) {
+                            if (mapped[i] < 0.0f) mapped[i] = 0.0f;
+                            if (mapped[i] > 1.0f) mapped[i] = 1.0f;
+                        }
+
+                        bufferOut[ind] = RGB(mapped[0] * 255, mapped[1] * 255, mapped[2] * 255);
+                    }
+                });
+            loop_future.wait();
+
+            hr = bitmap->CopyFromMemory(&winSize, bufferOut, width * 4);
             rerender = false;
         }
 
