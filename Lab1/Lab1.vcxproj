@@ -113,7 +113,7 @@
       <OmitFramePointers>false</OmitFramePointers>
       <WholeProgramOptimization>false</WholeProgramOptimization>
       <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
-      <AdditionalIncludeDirectories>C:\Nikstanov\Study\6sem\KG\Test\Lab1\thread-pool-4.0.1\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Nikstanov\Study\6sem\KG\Test\Lab1\thread-pool-4.0.1\include;C:\Nikstanov\Study\6sem\KG\Test\Lab1\libspng-0.7.4\spng</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <LanguageStandard_C>Default</LanguageStandard_C>
       <AdditionalOptions>/arch:AVX2 %(AdditionalOptions)</AdditionalOptions>
@@ -155,6 +155,7 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="geometry.h" />
     <ClInclude Include="Lab1.h" />
+    <ClInclude Include="model.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="tgaimage.h" />
@@ -165,6 +166,7 @@
     <ClCompile Include="engine.cpp" />
     <ClCompile Include="geometry.cpp" />
     <ClCompile Include="Lab1.cpp" />
+    <ClCompile Include="model.cpp" />
     <ClCompile Include="tgaimage.cpp" />
   </ItemGroup>
   <ItemGroup>

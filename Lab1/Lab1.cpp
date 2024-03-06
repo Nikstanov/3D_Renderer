@@ -8,6 +8,7 @@
 #include "engine.h"
 #include "camera.h"
 #include "tgaimage.h"
+#include "model.h"
 
 #include "BS_thread_pool.hpp"
 
@@ -29,66 +30,7 @@ std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\Models\\Int
 
 BS::thread_pool pool(12);
 
-
-struct Point {
-    int vertexInd = 0;
-    int textureInd = -1;
-    Vec3f normal{ -1.1111f,-1,-1 };
-};
-struct Face {
-    Point points[3];
-    Vec3f normal;
-};
-
-std::vector<Face> faces;
-std::vector<Vec4f> vertexes;
-std::vector<Vec3f> normalies;
-std::vector<Vec3f> texturesCord;
-
-TGAImage diffusemap_;
-TGAImage normalmap_;
-TGAImage specularmap_;
-TGAImage lightmap_;
-
-void load_texture(std::string filename, const char* suffix, TGAImage& img) {
-    std::string texfile(filename);
-    size_t dot = texfile.find_last_of(".");
-    if (dot != std::string::npos) {
-        texfile = texfile.substr(0, dot) + std::string(suffix);
-        std::cerr << "texture file " << texfile << " loading " << (img.read_tga_file(texfile.c_str()) ? "ok" : "failed") << std::endl;
-        img.flip_vertically();
-    }
-}
-
-Vec3f diffuse(Vec2f uvf) {
-    Vec2i uv(uvf[0] * diffusemap_.get_width(), uvf[1] * diffusemap_.get_height());
-    TGAColor color = diffusemap_.get(uv[0], uv[1]);
-    return Vec3f(color[0] / 255.f, color[1] / 255.f, color[2] / 255.f);
-}
-
-Vec3f light_map(Vec2f uvf) {
-    Vec2i uv(uvf[0] * lightmap_.get_width(), uvf[1] * lightmap_.get_height());
-    TGAColor color = lightmap_.get(uv[0], uv[1]);
-    return Vec3f(color[0] / 255.f, color[1] / 255.f, color[2] / 255.f);
-}
-
-Vec3f normal(Vec2f uvf) {
-    Vec2i uv(uvf[0] * normalmap_.get_width(), uvf[1] * normalmap_.get_height());
-    TGAColor c = normalmap_.get(uv[0], uv[1]);
-    Vec3f res;
-    for (int i = 0; i < 3; i++)
-        res[2 - i] = (float)c[i] / 255.f * 2.f - 1.f;
-    return res;
-}
-
-float specular(Vec2f uvf) {
-    Vec2i uv(uvf[0] * specularmap_.get_width(), uvf[1] * specularmap_.get_height());
-    return specularmap_.get(uv[0], uv[1])[0] / 1.f;
-}
-
-Vec3f calculateNormal(Face face) {
-    return cross((Vec3f)(vertexes[face.points[2].vertexInd] - vertexes[face.points[0].vertexInd]), (Vec3f)(vertexes[face.points[1].vertexInd] - vertexes[face.points[0].vertexInd])).normalize();
-}
+Model model;
 
 int width = 1920;
 int height = 1080;
@@ -158,80 +100,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
         return 0;
     }
 
-    std::ifstream in;
-    in.open(filePath);
-    if (in.is_open()) {
-
-        std::string line;
-        while (std::getline(in, line)) {
-            if (line.substr(0, 2) == "v ") {
-                Vec4f vert;
-                vert[3] = 1.0f;
-                sscanf_s(line.c_str(), "v %f %f %f", &vert[0], &vert[1], &vert[2]);
-                vertexes.push_back(vert);
-            }
-            if (line.substr(0, 3) == "vn ") {
-                Vec3f normal;
-                sscanf_s(line.c_str(), "vn %f %f %f", &normal.x, &normal.y, &normal.z);
-                normalies.push_back(normal.normalize());
-            }
-            if (line.substr(0, 3) == "vt ") {
-                Vec3f texture;
-                sscanf_s(line.c_str(), "vt %f %f %f", &texture.x, &texture.y, &texture.z);
-                texturesCord.push_back(texture);
-            }
-            if (line.substr(0, 2) == "f ") {
-                Face face;
-                std::istringstream v(line.substr(2));
-                std::string token;
-                int ind = 0;
-                while (v >> token) {
-                    Point p;
-                    int normalInd = -1;
-                    sscanf_s(token.c_str(), "%i/%i/%i", &p.vertexInd, &p.textureInd, &normalInd);
-                    p.vertexInd = p.vertexInd - 1;
-                    p.textureInd = p.textureInd - 1;
-                    if (normalInd > 0) p.normal = normalies[normalInd - 1];
-                    face.points[ind] = p;
-                    ind++;
-                }
-                faces.push_back(face);
-            }
-        }
-        in.close();
-        //vertexes.clear();
-    }
-
-    
-    std::map<int, std::vector<Face*>> map;
-    for (size_t i = 0; i < faces.size(); i++) {
-        Face face = faces[i];
-        faces[i].normal = calculateNormal(faces[i]);
-        for (size_t j = 0; j < 3; j++) {
-            map[faces[i].points[j].vertexInd].push_back(&faces[i]);
-        }
-    }
-    
-
-    for (size_t i = 0; i < faces.size(); i++) {
-        for (size_t j = 0; j < 3; j++) {
-            if (faces[i].points[j].normal.x == -1.1111f) {
-                std::vector<Face*> a = map[faces[i].points[j].vertexInd];
-                Vec3f norm{};
-                for (size_t k = 0; k < a.size(); k++) {
-                    norm = norm + a[k]->normal;
-                }
-                norm = (norm / a.size()).normalize();
-                faces[i].points[j].normal = norm;
-            }
-        }
-    }
-
-    load_texture(filePath, "_diffuse.tga", diffusemap_);
-    load_texture(filePath, "_nm.tga", normalmap_);
-    load_texture(filePath, "_spec.tga", specularmap_);
-    load_texture(filePath, "_emi.tga", lightmap_);
-
+    model = Model("C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\Models\\Shovel Knight", "shovel");
     light = light.normalize();
 
     ShowWindow(win.Window(), SW_SHOWMAXIMIZED);
@@ -393,6 +262,8 @@ void drawLine(int x0, int y0, int x1, int y1, Vec3f color) {
     }
 }
 
+Part part;
+
 Vec3f barycentric(Vec2f A, Vec2f B, Vec2f C, Vec2f P) {
     Vec3f s[2];
     for (int i = 2; i--; ) {
@@ -439,11 +310,11 @@ void rasterize(mat<4, 3, float>& clipc, mat<3, 3, float> vn, mat<3, 3, float> gl
             if (bc_screen.x < 0 || bc_screen.y < 0 || bc_screen.z<0) continue;
 
             Vec2f textureCoords{ textures[0] * bc_clip, textures[1] * bc_clip };
-            Vec3f new_color = diffuse(textureCoords);
+            Vec3f new_color = part.diffuse(textureCoords, defColor);
 
             Vec3f Norm{ vn[0] * bc_clip, vn[1] * bc_clip , vn[2] * bc_clip };
-            //Norm = Norm.normalize();
-            Norm = normal(textureCoords);
+            Norm = Norm.normalize();
+            Norm = part.normal(textureCoords, Norm);
                         
             Vec3f globalCoords{ global[0] * bc_clip, global[1] * bc_clip , global[2] * bc_clip };
             Vec3f negLight = (lightPos - globalCoords).normalize();
@@ -453,15 +324,14 @@ void rasterize(mat<4, 3, float>& clipc, mat<3, 3, float> vn, mat<3, 3, float> gl
 
             Vec3f viewDir = ((Vec3f)camera.getEye() - globalCoords).normalize();
             Vec3f R = (Norm * (Norm * negLight) - negLight).normalize();
-            float spec = 10.0f * pow(max((viewDir * R), 0.0f), specular(textureCoords));
-            //float spec = 1.0f * pow(max((viewDir * R), 0.0f), 64.0f);
+            float spec = 10.0f * pow(max((viewDir * R), 0.0f), part.specular(textureCoords, 32));
             if (spec < 0) spec = 0.0f;
 
             for (int i = 0; i < 3; i++) {
                 new_color[i] = 0.1f + new_color[i] * diff + specColor[i] * spec;
             }
 
-            Vec3f light_color = light_map(textureCoords);
+            Vec3f light_color = part.light_map(textureCoords);
 
             int ind = P.x + P.y * width;
             EnterCriticalSection(&sync_buffer[ind]);
@@ -591,6 +461,7 @@ int lightMode = 0;
 Matrix finalMatrix;
 Matrix modelViewProjection;
 
+
 void MainWindow::OnPaint()
 {
     HRESULT hr = CreateGraphicsResources();
@@ -618,127 +489,132 @@ void MainWindow::OnPaint()
             camera.updateViewMatrix();
             finalMatrix = Viewport * Projection * ModelView;
             modelViewProjection = Projection * ModelView;
-            size_t size = faces.size();
+            for (int partInd = 0; partInd < model.parts.size(); partInd++) {
+                part = model.parts[partInd];
+                size_t size = part.faces.size();
 
-            if (chained) {
-                const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
-                    [](const size_t i)
-                    {
-                        Vec4f screen_coords[3];
-                        Face face = faces[i];
-                        if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
-                            return;
-                        }
-                        for (size_t j = 0; j < 3; j++) {
-                            screen_coords[j] = finalMatrix * vertexes[face.points[j].vertexInd];
-                            if (screen_coords[j].w < 0) {
+                if (chained) {
+                    const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
+                        [](const size_t i)
+                        {
+                            
+                            Vec4f screen_coords[3];
+                            Face face = part.faces[i];
+                            if ((Vec4f(face.normal) * (camera.getEye() - model.vertexes[face.points[0].vertexInd])) > 0) {
                                 return;
                             }
-                            screen_coords[j] = screen_coords[j] / screen_coords[j].w;
-                        }
-                        for (int j = 0; j < 3; j++) {
-                            Vec3i a1 = screen_coords[j];
-                            Vec3i a2 = screen_coords[(j + 1) % 3];
-                            drawLine(a1[0], a1[1], a2[0], a2[1], black);
-                        }
-                    });
-                loop_future.wait();
-            }
-            if (lightMode == 1) {
-                const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
-                    [](const size_t i)
-                    {
-                        Vec4f screen_coords[3];
-                        Face face = faces[i];
-                        if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
-                            return;
-                        }
-                        for (size_t j = 0; j < 3; j++) {
-                            screen_coords[j] = finalMatrix * vertexes[face.points[j].vertexInd];
-                            if (screen_coords[j].w < 0) {
+                            for (size_t j = 0; j < 3; j++) {
+                                screen_coords[j] = finalMatrix * model.vertexes[face.points[j].vertexInd];
+                                if (screen_coords[j].w < 0) {
+                                    return;
+                                }
+                                screen_coords[j] = screen_coords[j] / screen_coords[j].w;
+                            }
+                            for (int j = 0; j < 3; j++) {
+                                Vec3i a1 = screen_coords[j];
+                                Vec3i a2 = screen_coords[(j + 1) % 3];
+                                drawLine(a1[0], a1[1], a2[0], a2[1], black);
+                            }
+                        });
+                    loop_future.wait();
+                }
+                if (lightMode == 1) {
+                    const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
+                        [](const size_t i)
+                        {
+                            Vec4f screen_coords[3];
+                            Face face = part.faces[i];
+                            if ((Vec4f(face.normal) * (camera.getEye() - model.vertexes[face.points[0].vertexInd])) > 0) {
                                 return;
                             }
-                            screen_coords[j] = screen_coords[j] / screen_coords[j].w;
-                            screen_coords[j][2] = (1.0f - screen_coords[j][2]) * 10000.f;
-                        }
-                        rasterize(screen_coords[0], screen_coords[1], screen_coords[2], Vec3f(1.0f, 1.0f, 1.0f) - blue);
+                            for (size_t j = 0; j < 3; j++) {
+                                screen_coords[j] = finalMatrix * model.vertexes[face.points[j].vertexInd];
+                                if (screen_coords[j].w < 0) {
+                                    return;
+                                }
+                                screen_coords[j] = screen_coords[j] / screen_coords[j].w;
+                                screen_coords[j][2] = (1.0f - screen_coords[j][2]) * 10000.f;
+                            }
+                            rasterize(screen_coords[0], screen_coords[1], screen_coords[2], Vec3f(1.0f, 1.0f, 1.0f) - blue);
 
-                    });
-                loop_future.wait();
-            }
-            if (lightMode == 2) {
-                const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
-                    [](const size_t i)
-                    {
-                        Vec4f screen_coords[3];
-                        Face face = faces[i];
-                        if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
-                            return;
-                        }
-                        for (size_t j = 0; j < 3; j++) {
-                            screen_coords[j] = finalMatrix * vertexes[face.points[j].vertexInd];
-                            if (screen_coords[j].w < 0) {
+                        });
+                    loop_future.wait();
+                }
+                if (lightMode == 2) {
+                    const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
+                        [](const size_t i)
+                        {
+                            Vec4f screen_coords[3];
+                            Face face = part.faces[i];
+                            if ((Vec4f(face.normal) * (camera.getEye() - model.vertexes[face.points[0].vertexInd])) > 0) {
                                 return;
                             }
-                            screen_coords[j] = screen_coords[j] / screen_coords[j].w;
-                            screen_coords[j][2] = (1.0f - screen_coords[j][2]) * 10000.f;
-                        }
+                            for (size_t j = 0; j < 3; j++) {
+                                screen_coords[j] = finalMatrix * model.vertexes[face.points[j].vertexInd];
+                                if (screen_coords[j].w < 0) {
+                                    return;
+                                }
+                                screen_coords[j] = screen_coords[j] / screen_coords[j].w;
+                                screen_coords[j][2] = (1.0f - screen_coords[j][2]) * 10000.f;
+                            }
 
-                        float colorMultiplier = (face.normal *  (light * -1)) + constLight;
-                        if (colorMultiplier < 0) colorMultiplier = 0;
-                        rasterize(screen_coords[0], screen_coords[1], screen_coords[2], (Vec3f(1.0f, 1.0f, 1.0f) - gold) * colorMultiplier);
-                    });
-                loop_future.wait();
-            }
-            if (lightMode == 3) {
-                const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
-                    [](const size_t i)
+                            float colorMultiplier = (face.normal * (light * -1)) + constLight;
+                            if (colorMultiplier < 0) colorMultiplier = 0;
+                            rasterize(screen_coords[0], screen_coords[1], screen_coords[2], (Vec3f(1.0f, 1.0f, 1.0f) - gold) * colorMultiplier);
+                        });
+                    loop_future.wait();
+                }
+                if (lightMode == 3) {
+                    const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
+                        [](const size_t i)
+                        {
+                            mat<3, 3, float> global_coords;
+                            mat<3, 3, float> normals;
+                            mat<3, 3, float> textures;
+                            Face face = part.faces[i];
+                            mat<4, 3, float> res;
+                            if ((Vec4f(face.normal) * (camera.getEye() - model.vertexes[face.points[0].vertexInd])) > 0) {
+                                return;
+                            }
+                            for (size_t j = 0; j < 3; j++) {
+                                global_coords.set_col(j, model.vertexes[face.points[j].vertexInd]);
+                                textures.set_col(j, model.texturesCord[face.points[j].textureInd]);
+                                res.set_col(j, modelViewProjection * model.vertexes[face.points[j].vertexInd]);
+                                normals.set_col(j, face.points[j].normal);
+                            }
+                            rasterize(res, normals, global_coords, textures, Vec3f(1.0f, 1.0f, 1.0f) - gold, white);
+                        });
+                    loop_future.wait();
+                    bloom();
+                }
+
+                const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, width,
+                    [](const size_t x)
                     {
-                        mat<3, 3, float> global_coords;
-                        mat<3,3,float> normals;
-                        mat<3, 3, float> textures;
-                        Face face = faces[i];
-                        mat<4,3,float> res;
-                        if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
-                            return;
+                        const float gamma = 1.0f;
+                        const float exposure = 1.0f;
+                        for (int y = 0; y < height; y++) {
+                            int ind = x + y * width;
+                            //Vec3f rgb = bloom_buffer[0][ind];
+                            Vec3f rgb = buffer[ind] + bloom_buffer[0][ind];
+
+                            //Vec3f mapped = Vec3f(rgb[0] / (rgb[0] + 1.0f), rgb[1] / (rgb[1] + 1.0f), rgb[2] / (rgb[2] + 1.0f));
+                            //Vec3f mapped = Vec3f(rgb[0], rgb[1], rgb[2]);
+                            Vec3f mapped = Vec3f(1.0f - exp(rgb[0] * (-exposure)), 1.0f - exp(rgb[1] * (-exposure)), 1.0f - exp(rgb[2] * (-exposure)));
+                            mapped = Vec3f(pow(mapped[0], gamma), pow(mapped[1], gamma), pow(mapped[2], gamma));
+
+
+                            for (int i = 0; i < 3; i++) {
+                                if (mapped[i] < 0.0f) mapped[i] = 0.0f;
+                                if (mapped[i] > 1.0f) mapped[i] = 1.0f;
+                            }
+
+                            bufferOut[ind] = RGB(mapped[0] * 255, mapped[1] * 255, mapped[2] * 255);
                         }
-                        for (size_t j = 0; j < 3; j++) {
-                            global_coords.set_col(j, vertexes[face.points[j].vertexInd]);
-                            textures.set_col(j, texturesCord[face.points[j].textureInd]);
-                            res.set_col(j, modelViewProjection * vertexes[face.points[j].vertexInd]);
-                            normals.set_col(j,face.points[j].normal);
-                        }
-                        rasterize(res, normals, global_coords, textures, Vec3f(1.0f, 1.0f, 1.0f) - gold, white);
                     });
                 loop_future.wait();
-                bloom();
             }
-
-            const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, width,
-                [](const size_t x)
-                {
-                    const float gamma = 1.0f / 2.2f;
-                    const float exposure = 1.0f;
-                    for (int y = 0; y < height; y++) {
-                        int ind = x + y * width;
-                        //Vec3f rgb = bloom_buffer[0][ind];
-                        Vec3f rgb = buffer[ind] + bloom_buffer[0][ind];
-
-                        //Vec3f mapped = Vec3f(rgb[0] / (rgb[0] + 1.0f), rgb[1] / (rgb[1] + 1.0f), rgb[2] / (rgb[2] + 1.0f));
-                        //Vec3f mapped = Vec3f(rgb[0], rgb[1], rgb[2]);
-                        Vec3f mapped = Vec3f(1.0f - exp(rgb[0] * (-exposure)), 1.0f - exp(rgb[1] * (-exposure)), 1.0f - exp(rgb[2] * (-exposure)));
-                        //mapped = Vec3f(pow(mapped[0], gamma), pow(mapped[1], gamma), pow(mapped[2], gamma));
-
-
-                        for (int i = 0; i < 3; i++) {
-                            if (mapped[i] < 0.0f) mapped[i] = 0.0f;
-                            if (mapped[i] > 1.0f) mapped[i] = 1.0f;
-                        }
-
-                        bufferOut[ind] = RGB(mapped[0] * 255, mapped[1] * 255, mapped[2] * 255);
-                    }
-                });
-            loop_future.wait();
+            
 
             hr = bitmap->CopyFromMemory(&winSize, bufferOut, width * 4);
             rerender = false;
