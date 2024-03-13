@@ -25,10 +25,14 @@ HINSTANCE hInst;                                // current instance
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 HWND win;
+
 std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\Models\\Intergalactic Spaceship\\Intergalactic_Spaceship.obj";
+//std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\DoomCombatScene.obj";
+//std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\Models\\Mimic Chest\\Mimic.obj";
+//std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\Models\\Box\\Box.obj";
+//std::string filePath = "C:\\Nikstanov\\Study\\6sem\\KG\\TestObjects\\Models\\Lanterne\\Lanterne.obj";
 
 BS::thread_pool pool(12);
-
 
 struct Point {
     int vertexInd = 0;
@@ -99,7 +103,7 @@ float znear = 0.1f;
 float lastX = 400, lastY = 300;
 float constLight = .1f;
 
-Camera camera{10,  3.141557f / 2 ,  3.141557f / 2 , Vec4f(0.0f , 0.0f , 0.0f, 1)};
+Camera camera{10.0f,  3.141557f / 2 ,  3.141557f / 2 , Vec4f(0.0f , 0.0f , 0.0f, 1)};
 Vec3f light{ 1.0f, 1.0f, 1.0f};
 Vec3f lightPos{ 5.0f, 5.0f, 5.0f };
 
@@ -133,7 +137,7 @@ class MainWindow : public BaseWindow<MainWindow>
 
     float                  fontSize = 10.0f;
 
-    HRESULT             CreateGraphicsResources();
+    HRESULT             CreateGraphicsResources(float scale);
     void                DiscardGraphicsResources();
     void                OnPaint();
 
@@ -199,9 +203,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
             }
         }
         in.close();
-        //vertexes.clear();
     }
-
     
     std::map<int, std::vector<Face*>> map;
     for (size_t i = 0; i < faces.size(); i++) {
@@ -252,13 +254,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     return 0;
 }
 
-HRESULT MainWindow::CreateGraphicsResources()
+//float weight[5]{ 0.25508352f, 0.11098164f, 0.01330373f, 0.0038771 };
+float weight[5]{ 0.259027, 0.2195946, 0.1376216, 0.069054, 0.030216 };
+
+const int downscaling_iterations_amount_max = 8;
+
+HRESULT MainWindow::CreateGraphicsResources(float scale)
 {
     HRESULT hr = S_OK;
     if (pRenderTarget == NULL)
     {
         static const WCHAR msc_fontName[] = L"Verdana";
-        static const FLOAT msc_fontSize = 20.0f;
+        FLOAT msc_fontSize = 40.0f * scale;
         fontSize = msc_fontSize;
 
         hr = DWriteCreateFactory(
@@ -294,7 +301,7 @@ HRESULT MainWindow::CreateGraphicsResources()
         RECT rc;
         GetClientRect(m_hwnd, &rc);
 
-        D2D1_SIZE_U size = D2D1::SizeU(rc.right * 2, rc.bottom * 2);
+        D2D1_SIZE_U size = D2D1::SizeU(rc.right * scale, rc.bottom * scale);
 
         hr = pFactory->CreateHwndRenderTarget(
             D2D1::RenderTargetProperties(),
@@ -322,10 +329,11 @@ HRESULT MainWindow::CreateGraphicsResources()
             zbuffer = new float[width * height];
             sync_buffer = new CRITICAL_SECTION[width * height];
 
-            bloom_buffer = new Vec3f*[2];
-            bloom_buffer[0] = new Vec3f[width * height];
-            bloom_buffer[1] = new Vec3f[width * height];
-
+            bloom_buffer = new Vec3f*[downscaling_iterations_amount_max*2];
+            for (int i = 0; i < downscaling_iterations_amount_max * 2; i++) {
+                bloom_buffer[i] = new Vec3f[width * height];
+            }
+            
             for (int i = 0; i < width * height; i++) {
                 InitializeCriticalSection(&sync_buffer[i]);
             }
@@ -348,8 +356,20 @@ HRESULT MainWindow::CreateGraphicsResources()
 
 void MainWindow::DiscardGraphicsResources()
 {
+    
     SafeRelease(&pRenderTarget);
     SafeRelease(&pBrush);
+    SafeRelease(&bitmap);
+
+    delete[] buffer;
+    delete[] bufferOut;
+    delete[] zbuffer;
+    delete[] sync_buffer;
+
+    for (int i = 0; i < 10; i++) {
+        delete[] bloom_buffer[i];
+    }
+    delete[] bloom_buffer;
 }
 
 void inline setPixel(int x, int y, Vec3f color) {
@@ -436,13 +456,13 @@ void rasterize(mat<4, 3, float>& clipc, mat<3, 3, float> vn, mat<3, 3, float> gl
             bc_clip = bc_clip / (bc_clip.x + bc_clip.y + bc_clip.z);
             float frag_depth = 1.0f - clipc[2] * bc_clip;
 
-            if (bc_screen.x < 0 || bc_screen.y < 0 || bc_screen.z<0) continue;
+            if (bc_screen.x < 0 || bc_screen.y < 0 || bc_screen.z < 0) continue;
 
             Vec2f textureCoords{ textures[0] * bc_clip, textures[1] * bc_clip };
             Vec3f new_color = diffuse(textureCoords);
 
             Vec3f Norm{ vn[0] * bc_clip, vn[1] * bc_clip , vn[2] * bc_clip };
-            //Norm = Norm.normalize();
+            Norm = Norm.normalize();
             Norm = normal(textureCoords);
                         
             Vec3f globalCoords{ global[0] * bc_clip, global[1] * bc_clip , global[2] * bc_clip };
@@ -462,15 +482,16 @@ void rasterize(mat<4, 3, float>& clipc, mat<3, 3, float> vn, mat<3, 3, float> gl
             }
 
             Vec3f light_color = light_map(textureCoords);
+            //Vec3f light_color = Vec3f(0, 0, 0);
 
             int ind = P.x + P.y * width;
             EnterCriticalSection(&sync_buffer[ind]);
             if (zbuffer[ind] <= frag_depth) {
                 zbuffer[ind] = frag_depth;
-
+                
                 if (light_color[0] > 0.0f || light_color[1] > 0.0f || light_color[2] > 0.0f) {
-                    new_color = light_color * 5.0f;
-                    bloom_buffer[0][ind] = new_color;
+                    bloom_buffer[0][ind] = light_color * 20.0f;
+                    new_color = new_color + light_color;
                 }
 
                 buffer[ind] = new_color;
@@ -504,12 +525,12 @@ void rasterize(Vec3i t0, Vec3i t1, Vec3i t2, Vec3f color) {
 
         for (int j = 0; j <= C.x; j++) {
             float phi = j == C.x ? 1.f : (float)j / C.x;
-            Vec3i P = Vec3f(A) + C * phi;
-
-            if (P.x < 0 || P.y < 0 || P.x >= width || P.y >= height) {
+            Vec3f P = Vec3f(A) + C * phi;
+            Vec3i _P = P;
+            if (_P.x < 0 || _P.y < 0 || _P.x >= width || _P.y >= height) {
                 continue;
             }
-            int idx = P.x + P.y * width;
+            int idx = _P.x + _P.y * width;
 
             EnterCriticalSection(&sync_buffer[idx]);
             if (zbuffer[idx] < P.z) {
@@ -522,57 +543,150 @@ void rasterize(Vec3i t0, Vec3i t1, Vec3i t2, Vec3f color) {
 }
 
 
-float weight[5]{ 0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216 };
-
-
-Vec3f texture(Vec3f* buf, Vec2i coords) {
-    if (coords.x < 0 || coords.y < 0 || coords.x >= width || coords.y >= height) {
+Vec3f texture(Vec3f* buf, Vec2i coords, Vec2i scale) {
+    if (coords.x < 0 || coords.y < 0 || coords.x >= scale.x || coords.y >= scale.y) {
         return Vec3i(0, 0, 0);
     }
     return buf[coords.x + coords.y * width];
 }
 
-void guassian(Vec3f* buf, Vec3f* bufOut, Vec2i TexCoords, bool horizontal) {
-    Vec3f result = texture(buf, TexCoords) * weight[0];
+void downsampling4x(Vec3f* buf, Vec3f* bufOut, int buf_width, int buf_height) {
+
+    for (int y = 0; y < buf_height; y++) {
+        for (int x = 0; x < buf_width; x++) {
+            int newInd = x + y * width;
+            int ind = newInd * 2;
+            bufOut[newInd] = (buf[ind] + buf[ind + 1] + buf[ind + width] + buf[ind + 1 + width]) / 4;
+            newInd++;
+        }
+    }
+}
+
+void guassian(Vec3f* buf, Vec3f* bufOut, Vec2i TexCoords, bool horizontal, Vec2i new_scale) {
+    Vec3f result = texture(buf, TexCoords, new_scale) * weight[0];
+    int tempY = TexCoords.y * width;
+
     if (horizontal)
     {
         for (int i = 1; i < 5; ++i)
         {
-            result = result + texture(buf, TexCoords + Vec2i(1 * i, 0)) * weight[i];
-            result = result + texture(buf, TexCoords - Vec2i(1 * i, 0)) * weight[i];
+            if (TexCoords.x + i < width) {
+                result = result + buf[TexCoords.x + i + tempY] * weight[i];
+            }
+            if (TexCoords.x - i >= 0) {
+                result = result + buf[TexCoords.x - i + tempY] * weight[i];
+            }
         }
     }
     else
     {
         for (int i = 1; i < 5; ++i)
         {
-            result = result + texture(buf, TexCoords + Vec2i(0, 1 * i)) * weight[i];
-            result = result + texture(buf, TexCoords - Vec2i(0, 1 * i)) * weight[i];
+            if (TexCoords.y + i < height) {
+                result = result + buf[TexCoords.x + (TexCoords.y + i) * width] * weight[i];
+            }
+            if (TexCoords.y - i >= 0) {
+                result = result + buf[TexCoords.x + (TexCoords.y - i) * width] * weight[i];
+            }
         }
     }
-    bufOut[TexCoords.x + TexCoords.y * width] = result;
+    bufOut[TexCoords.x + tempY] = result;
 }
 
-void bloom() {
-    bool horizontal = true, first_iteration = true;
-    int amount = 6;
-    for (unsigned int i = 0; i < amount; i++)
+bool horizontal = true, first_iteration = true;
+
+void upsampling4x(Vec3f* buf, Vec3f* bufOut, int buf_width, int buf_height) {
+
+    for (unsigned int ind = 0; ind < width * height; ind++) {
+        bufOut[ind] = Vec3f(0.0f, 0.0f, 0.0f);
+    }
+
+    for (unsigned int x = 0; x < buf_width; x++) {
+        for (unsigned int y = 0; y < buf_height; y++) {
+            int ind = x + y * width;
+            bufOut[ind * 2] = buf[ind];
+        }
+    }
+        
+    int amount = 2;
+
+    Vec2i new_scale(buf_width * 2, buf_height * 2);
+
+    for (unsigned int j = 0; j < amount; j++)
     {
-        const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, width,
-            [first_iteration, horizontal](const size_t x)
+        const BS::multi_future<void> loop_future = pool.submit_blocks<size_t>(0, new_scale.x,
+            [new_scale, bufOut, buf](const unsigned int start, const unsigned int end)
             {
-                for (int y = 0; y < height; y++) {
-                    guassian(first_iteration ? bloom_buffer[0] : bloom_buffer[!horizontal], bloom_buffer[horizontal], Vec2i(x,y), horizontal);
+                for (unsigned int x = start; x < end; x++) {
+                    for (int y = 0; y < new_scale.y; y++) {
+                        guassian(first_iteration ? bufOut : (horizontal) ? bufOut : buf, (horizontal) ? buf : bufOut, Vec2i(x, y), horizontal, new_scale);
+                    }
                 }
             });
         loop_future.wait();
+        
         horizontal = !horizontal;
         if (first_iteration)
             first_iteration = false;
     }
 }
 
+void addBuffers(Vec3f* bufA, Vec3f* bufB, int buf_width, int buf_height) {
+    for (unsigned int x = 0; x < buf_width; x++) {
+        for (unsigned int y = 0; y < buf_height; y++) {
+            int ind = x + y * width;
+            bufA[ind] = bufA[ind] + bufB[ind];
+        }
+    }
+}
 
+void bloom() {
+
+    int downscaling_iterations_amount = 0;
+    Vec2i new_scale(width, height);
+    for (unsigned int i = 0; i < downscaling_iterations_amount_max; i++) {
+
+        if (new_scale.x % 2 == 1 || new_scale.y % 2 == 1) break;
+        downscaling_iterations_amount++;
+
+        new_scale.x /= 2;
+        new_scale.y /= 2;
+        if (i == 0) {
+            downsampling4x(bloom_buffer[0], bloom_buffer[0], new_scale.x, new_scale.y);
+        }
+        else {
+            downsampling4x(bloom_buffer[2*(i - 1)], bloom_buffer[2*i], new_scale.x, new_scale.y);
+        }
+
+        bool horizontal = true, first_iteration = true;
+        int amount = 4;
+
+        for (unsigned int j = 0; j < amount; j++)
+        {
+            const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, new_scale.x,
+                [first_iteration, horizontal, new_scale, i](const size_t x)
+                {
+                    for (int y = 0; y < new_scale.y; y++) {
+                        guassian(first_iteration ? bloom_buffer[2*i] : bloom_buffer[2*i + !horizontal], bloom_buffer[2 * i + horizontal], Vec2i(x, y), horizontal, new_scale);
+                    }
+                });
+            loop_future.wait();
+            horizontal = !horizontal;
+            if (first_iteration)
+                first_iteration = false;
+        }
+
+
+    }
+    for (unsigned int i = downscaling_iterations_amount - 1; i > 0; i--) {
+        upsampling4x(bloom_buffer[i * 2], bloom_buffer[i * 2 - 1], new_scale.x, new_scale.y);
+        new_scale.x *= 2;
+        new_scale.y *= 2;
+        addBuffers(bloom_buffer[(i - 1) * 2], bloom_buffer[i * 2 - 1], new_scale.x, new_scale.y);
+    }
+
+    upsampling4x(bloom_buffer[0], bloom_buffer[1], new_scale.x, new_scale.y);
+}
 
 double clockToMilliseconds(clock_t ticks) {
     return (ticks / (double)CLOCKS_PER_SEC) * 1000.0;
@@ -581,8 +695,11 @@ double clockToMilliseconds(clock_t ticks) {
 clock_t deltaTime = 0;
 unsigned int frames = 0;
 double  frameRate = 60;
+double framerate = 0;
 double  averageFrameTimeMilliseconds = 33.333;
 bool rerender = true;
+int scaleMode = 2;
+float scaleSizes[]{ 0.25f, 0.5f, 1.0f, 2.0f, 4.0f };
 
 
 bool chained = true;
@@ -591,9 +708,10 @@ int lightMode = 0;
 Matrix finalMatrix;
 Matrix modelViewProjection;
 
+
 void MainWindow::OnPaint()
 {
-    HRESULT hr = CreateGraphicsResources();
+    HRESULT hr = CreateGraphicsResources(scaleSizes[scaleMode]);
     if (SUCCEEDED(hr))
     {
         clock_t beginFrame = clock();
@@ -608,10 +726,12 @@ void MainWindow::OnPaint()
             for (size_t i = 0; i < height; i++) {
                 for (size_t j = 0; j < width; j++) {
                     int ind = i * width + j;
-                    buffer[ind] = Vec3f(1.0f,1.0f,1.0f);
+                    buffer[ind] = Vec3f(0.0f,0.0f,0.0f);
                     zbuffer[ind] = -100000.0f;
                     bufferOut[ind] = rgbWhite;
-                    bloom_buffer[0][ind] = Vec3f(0.0f, 0.0f, 0.0f);
+                    for (size_t k = 0; k < downscaling_iterations_amount_max * 2; k++) {
+                        bloom_buffer[k][ind] = Vec3f(0.0f, 0.0f, 0.0f);
+                    }
                 }
             }
 
@@ -711,6 +831,28 @@ void MainWindow::OnPaint()
                         rasterize(res, normals, global_coords, textures, Vec3f(1.0f, 1.0f, 1.0f) - gold, white);
                     });
                 loop_future.wait();
+            }
+            if (lightMode == 4) {
+                const BS::multi_future<void> loop_future = pool.submit_loop<size_t>(0, size,
+                    [](const size_t i)
+                    {
+                        mat<3, 3, float> global_coords;
+                        mat<3, 3, float> normals;
+                        mat<3, 3, float> textures;
+                        Face face = faces[i];
+                        mat<4, 3, float> res;
+                        if ((Vec4f(face.normal) * (camera.getEye() - vertexes[face.points[0].vertexInd])) > 0) {
+                            return;
+                        }
+                        for (size_t j = 0; j < 3; j++) {
+                            global_coords.set_col(j, vertexes[face.points[j].vertexInd]);
+                            textures.set_col(j, texturesCord[face.points[j].textureInd]);
+                            res.set_col(j, modelViewProjection * vertexes[face.points[j].vertexInd]);
+                            normals.set_col(j, face.points[j].normal);
+                        }
+                        rasterize(res, normals, global_coords, textures, Vec3f(1.0f, 1.0f, 1.0f) - gold, white);
+                    });
+                loop_future.wait();
                 bloom();
             }
 
@@ -720,16 +862,13 @@ void MainWindow::OnPaint()
                     const float gamma = 1.0f / 2.2f;
                     const float exposure = 1.0f;
                     for (int y = 0; y < height; y++) {
+
                         int ind = x + y * width;
-                        //Vec3f rgb = bloom_buffer[0][ind];
-                        Vec3f rgb = buffer[ind] + bloom_buffer[0][ind];
+                        
+                        Vec4f rgb = buffer[ind] + bloom_buffer[1][ind];
 
-                        //Vec3f mapped = Vec3f(rgb[0] / (rgb[0] + 1.0f), rgb[1] / (rgb[1] + 1.0f), rgb[2] / (rgb[2] + 1.0f));
-                        //Vec3f mapped = Vec3f(rgb[0], rgb[1], rgb[2]);
                         Vec3f mapped = Vec3f(1.0f - exp(rgb[0] * (-exposure)), 1.0f - exp(rgb[1] * (-exposure)), 1.0f - exp(rgb[2] * (-exposure)));
-                        //mapped = Vec3f(pow(mapped[0], gamma), pow(mapped[1], gamma), pow(mapped[2], gamma));
-
-
+                        mapped = Vec3f(pow(mapped[0], gamma), pow(mapped[1], gamma), pow(mapped[2], gamma));
                         for (int i = 0; i < 3; i++) {
                             if (mapped[i] < 0.0f) mapped[i] = 0.0f;
                             if (mapped[i] > 1.0f) mapped[i] = 1.0f;
@@ -746,8 +885,8 @@ void MainWindow::OnPaint()
 
         pRenderTarget->DrawBitmap(bitmap, &winSizeF, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &winSizeF);
 
-        std::wstring fps = std::to_wstring(int(frameRate));
-        D2D1_RECT_F layoutRect = D2D1::RectF(0, 0, 50, 40);
+        std::wstring fps =  std::to_wstring(int(frameRate + 0.5)) + std::wstring(L",") + std::to_wstring(int(framerate + 0.5));
+        D2D1_RECT_F layoutRect = D2D1::RectF(0, 0, 150 * scaleSizes[scaleMode], 40 * scaleSizes[scaleMode]);
         pRenderTarget->DrawTextW(fps.c_str(), fps.size(), pTextFormat_, layoutRect, pBrush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
 
         hr = pRenderTarget->EndDraw();
@@ -760,6 +899,8 @@ void MainWindow::OnPaint()
 
         clock_t endFrame = clock();
         deltaTime += endFrame - beginFrame;
+        framerate = endFrame - beginFrame;
+
         frames++;
         if (clockToMilliseconds(deltaTime) > 1000.0) {
             frameRate = (double)frames * 0.5 + frameRate * 0.5;
@@ -823,7 +964,12 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
             chained = !chained;
         }
         if (wParam == '2') {
-            lightMode = (lightMode + 1) % 4;
+            lightMode = (lightMode + 1) % 5;
+        }
+        if (wParam == '3') {
+            DiscardGraphicsResources();
+            scaleMode = (scaleMode + 1) % 5;
+            
         }
         
         float cameraSpeed = 0.05f;
